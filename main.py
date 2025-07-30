@@ -3,13 +3,12 @@ import importlib
 import threading
 import os
 from logger import logger
-from Scripts.Predictive_Report.ingest_typeform import process_typeform_submission
-from Scripts.Elasticity.elasticity_typeform import process_typeform_submission as process_elasticity_submission
+from Scripts.JSON_to_csv.ingest_typeform import process_typeform_submission
 
 app = Flask(__name__)
 
 # --- ROUTE SAFEGUARD ---
-RENDER_ENV = os.getenv("RENDER_ENV", "/ingest-typeform-test")  # Optional default for dev
+RENDER_ENV = os.getenv("RENDER_ENV", "/ingest-typeform")  # Optional default for dev
 if not RENDER_ENV.startswith("/"):
     raise RuntimeError(f"❌ Invalid or missing RENDER_ENV: {RENDER_ENV!r} — must start with '/'")
 
