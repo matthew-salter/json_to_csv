@@ -38,19 +38,26 @@ def get_latest_input_file() -> str:
 def flatten_json(obj):
     flat_dict = {}
 
-    def recurse(node, prefix=[]):
+    def recurse(node, prefix=""):
         if isinstance(node, dict):
-            for idx, (key, value) in enumerate(node.items(), 1):
-                new_prefix = prefix + [str(idx)]
-                recurse(value, new_prefix + [key])
+            count = 0
+            for key, value in node.items():
+                count += 1
+                index = f"{prefix}{count}" if prefix == "" else f"{prefix}.{count}"
+                if isinstance(value, dict):
+                    recurse(value, index)
+                elif isinstance(value, list):
+                    joined = "\n".join(str(v) for v in value)
+                    flat_dict[f"{index} {key}"] = joined
+                else:
+                    flat_dict[f"{index} {key}"] = str(value) if value is not None else ""
         elif isinstance(node, list):
-            for idx, item in enumerate(node, 1):
-                new_prefix = prefix + [str(idx)]
-                recurse(item, new_prefix)
+            for i, item in enumerate(node, 1):
+                index = f"{prefix}.{i}" if prefix else str(i)
+                recurse(item, index)
         else:
-            # Base case: value is scalar or null
-            key_path = " → ".join(prefix)
-            flat_dict[key_path] = str(node) if node is not None else ""
+            # Scalar value at root (very rare)
+            flat_dict[prefix] = str(node)
 
     recurse(obj)
     return flat_dict
