@@ -54,16 +54,18 @@ def convert_json_to_csv(payload: dict) -> dict:
     csv_writer.writerow([first_value])
     sample_csv = csv_buffer.getvalue()
 
-    # 🔹 Step 6: Create output file name based on input file date
-    basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
+    # 🔹 Step 6: Use exact timestamp from input filename
+    # e.g. from 'JSON_input_file_31-07-2025_11-44-02.txt' → '31-07-2025_11-44-02'
     try:
-        parsed_date = datetime.strptime(basename, "%d-%m-%Y")
-        formatted_timestamp = parsed_date.strftime("%Y%m%d")
-    except ValueError:
-        logger.warning(f"⚠️ Unable to parse date from filename: {basename}. Defaulting to current date.")
-        formatted_timestamp = datetime.utcnow().strftime("%Y%m%d")
+        basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
+        if not basename:
+            raise ValueError("Empty timestamp extracted from filename.")
+        timestamp_str = basename  # use as-is
+    except Exception as e:
+        logger.warning(f"⚠️ Failed to parse timestamp from input filename: {e}")
+        timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
 
-    output_filename = f"csv_output_file_{formatted_timestamp}.csv"
+    output_filename = f"csv_output_file_{timestamp_str}.csv"
     output_path = f"csv_Output_File/{output_filename}"
 
     # 🔹 Step 7: Write to Supabase
