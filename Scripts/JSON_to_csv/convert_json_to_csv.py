@@ -3,10 +3,13 @@ import json
 import csv
 from datetime import datetime
 from io import StringIO
+from collections import defaultdict
+
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
+
 
 # 🔹 Setup Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -14,6 +17,7 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = "panelitix"
 SUPABASE_FOLDER = "JSON_to_csv/JSON_Input_File"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
 
 def get_latest_input_file() -> str:
     logger.info("📂 Scanning Supabase input folder for .txt files...")
@@ -30,29 +34,35 @@ def get_latest_input_file() -> str:
         logger.error(f"❌ Failed to list Supabase folder: {e}")
         raise
 
-# 🔹 Flatten function using structure-based prefix keys like "1", "1.1"
-def flatten_json(json_obj):
-    flat_dict = {}
 
-    def recurse(node, parent_prefix):
-        if not isinstance(node, dict):
-            return
+def flatten_json(obj, key_counter=None, flat_dict=None):
+    if flat_dict is None:
+        flat_dict = {}
+    if key_counter is None:
+        key_counter = defaultdict(int)
 
-        for key, value in node.items():
-            if isinstance(value, dict):
-                # If key is something like "1", "1.1", etc., use as parent prefix
-                if key.replace(".", "").isdigit():
-                    recurse(value, key)
-                else:
-                    recurse(value, parent_prefix)
-            else:
-                # Use only the key name + trailing prefix
-                asset_title = key.replace("Section ", "").replace("Sub-Section ", "").replace("Related Article ", "").strip()
-                column_title = f"{asset_title} {parent_prefix}".strip()
-                flat_dict[column_title] = "\n".join(value) if isinstance(value, list) else str(value)
+    def _recurse(item):
+        if isinstance(item, dict):
+            for key, value in item.items():
+                _handle_kv(key, value)
+        elif isinstance(item, list):
+            for sub_item in item:
+                _recurse(sub_item)
 
-    recurse(json_obj, "")
+    def _handle_kv(key, value):
+        if isinstance(value, dict):
+            _recurse(value)
+        elif isinstance(value, list):
+            flat_value = "\n".join(str(v) for v in value)
+            key_counter[key] += 1
+            flat_dict[f"{key} {key_counter[key]}"] = flat_value
+        else:
+            key_counter[key] += 1
+            flat_dict[f"{key} {key_counter[key]}"] = str(value)
+
+    _recurse(obj)
     return flat_dict
+
 
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to CSV conversion")
@@ -81,7 +91,7 @@ def convert_json_to_csv(_: dict) -> dict:
         logger.error(f"❌ JSON decoding failed: {e}")
         return {"error": f"Invalid JSON: {e}"}
 
-    # 🔹 Step 4: Flatten JSON using key-based prefixing
+    # 🔹 Step 4: Flatten JSON to asset-title: content pairs
     try:
         flattened = flatten_json(json_data)
         if not flattened:
@@ -122,6 +132,7 @@ def convert_json_to_csv(_: dict) -> dict:
 
     logger.info(f"✅ CSV written successfully to: {output_path}")
     return {"status": "success", "csv_path": output_path}
+
 
 # 🔹 Required by main.py dispatcher
 def run_prompt(payload: dict) -> dict:
