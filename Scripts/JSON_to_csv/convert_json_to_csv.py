@@ -46,3 +46,7 @@ def convert_json_to_csv(payload: dict) -> dict:
 
     logger.info(f"✅ CSV written successfully to: {output_path}")
     return {"status": "success", "csv_path": output_path}
+
+# 🔹 Required by main.py dispatcher
+def run_prompt(payload: dict) -> dict:
+    return convert_json_to_csv(payload)
