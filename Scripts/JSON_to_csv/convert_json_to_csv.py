@@ -1,5 +1,3 @@
-# Scripts/JSON_to_csv/convert_json_to_csv.py
-
 import os
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
