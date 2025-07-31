@@ -1,6 +1,7 @@
 import os
 import requests
 import time
+import pytz
 from datetime import datetime
 from logger import logger
 from pathlib import Path
@@ -70,8 +71,10 @@ def process_typeform_submission(data):
             raise ValueError("❌ Missing required field: JSON file URL")
 
         # Build Supabase path
-        timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
-        file_path = f"JSON_Input_File/JSON_input_file_{timestamp_str}.txt"
+        uk_tz = pytz.timezone("Europe/London")
+        local_time = datetime.now(uk_tz)
+        timestamp_str = local_time.strftime("%d-%m-%Y_%H-%M-%S")
+        file_path = f"JSON_Input_File/JSON_input_file_{timestamp_str}.tx
         logger.info(f"🧾 Final Supabase path: {file_path}")
 
         # Download file
