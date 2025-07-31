@@ -37,27 +37,36 @@ def get_latest_input_file() -> str:
 
 def flatten_json(obj):
     flat_dict = {}
+    section_idx = 0  # e.g., 1, 2, 3
+    sub_idx = 0      # e.g., 1.1, 1.2, etc.
 
     def recurse(node, prefix=""):
+        nonlocal section_idx, sub_idx
+
         if isinstance(node, dict):
-            count = 0
             for key, value in node.items():
-                count += 1
-                index = f"{prefix}{count}" if prefix == "" else f"{prefix}.{count}"
-                if isinstance(value, dict):
-                    recurse(value, index)
+                # Detect Section (top-level key like "Section 1", "Section 2", etc.)
+                if isinstance(value, dict) and key.lower().startswith("section "):
+                    section_idx += 1
+                    sub_idx = 0
+                    recurse(value, prefix=str(section_idx))
+                # Detect Sub-Section inside Section
+                elif isinstance(value, dict) and key.lower().startswith("sub-section"):
+                    sub_idx += 1
+                    sub_prefix = f"{section_idx}.{sub_idx}"
+                    recurse(value, prefix=sub_prefix)
+                # Recurse into any other nested dict
+                elif isinstance(value, dict):
+                    recurse(value, prefix=prefix)
+                # Array: flatten into newline-separated string
                 elif isinstance(value, list):
                     joined = "\n".join(str(v) for v in value)
-                    flat_dict[f"{index} {key}"] = joined
+                    flat_dict[f"{prefix} {key}"] = joined
+                # Scalar: assign directly
                 else:
-                    flat_dict[f"{index} {key}"] = str(value) if value is not None else ""
-        elif isinstance(node, list):
-            for i, item in enumerate(node, 1):
-                index = f"{prefix}.{i}" if prefix else str(i)
-                recurse(item, index)
+                    flat_dict[f"{prefix} {key}"] = str(value) if value is not None else ""
         else:
-            # Scalar value at root (very rare)
-            flat_dict[prefix] = str(node)
+            flat_dict[prefix] = str(node) if node is not None else ""
 
     recurse(obj)
     return flat_dict
