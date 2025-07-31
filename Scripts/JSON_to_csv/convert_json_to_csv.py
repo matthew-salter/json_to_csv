@@ -34,20 +34,22 @@ def get_latest_input_file() -> str:
 def flatten_json(json_obj):
     flat_dict = {}
 
-    def recurse(node, prefix):
+    def recurse(node, parent_prefix):
         if not isinstance(node, dict):
             return
 
         for key, value in node.items():
-            # If this is a nested block (e.g., "1", "1.1")
             if isinstance(value, dict):
-                recurse(value, key)
-            else:
-                full_key = f"{prefix} {key} {prefix}"
-                if isinstance(value, list):
-                    flat_dict[full_key] = "\n".join(str(v) for v in value)
+                # If key is something like "1", "1.1", etc., use as parent prefix
+                if key.replace(".", "").isdigit():
+                    recurse(value, key)
                 else:
-                    flat_dict[full_key] = str(value) if value is not None else ""
+                    recurse(value, parent_prefix)
+            else:
+                # Use only the key name + trailing prefix
+                asset_title = key.replace("Section ", "").replace("Sub-Section ", "").replace("Related Article ", "").strip()
+                column_title = f"{asset_title} {parent_prefix}".strip()
+                flat_dict[column_title] = "\n".join(value) if isinstance(value, list) else str(value)
 
     recurse(json_obj, "")
     return flat_dict
