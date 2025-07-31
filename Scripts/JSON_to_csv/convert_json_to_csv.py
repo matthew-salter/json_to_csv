@@ -35,32 +35,43 @@ def get_latest_input_file() -> str:
         raise
 
 
-def flatten_json(obj, key_counter=None, flat_dict=None):
-    if flat_dict is None:
-        flat_dict = {}
-    if key_counter is None:
-        key_counter = defaultdict(int)
+def flatten_json(obj):
+    flat_dict = {}
+    section_counter = 0
 
-    def _recurse(item):
-        if isinstance(item, dict):
-            for key, value in item.items():
-                _handle_kv(key, value)
-        elif isinstance(item, list):
-            for sub_item in item:
-                _recurse(sub_item)
+    def recurse(node, path=None, sub_counter=0):
+        nonlocal section_counter
+        if path is None:
+            path = []
 
-    def _handle_kv(key, value):
-        if isinstance(value, dict):
-            _recurse(value)
-        elif isinstance(value, list):
-            flat_value = "\n".join(str(v) for v in value)
-            key_counter[key] += 1
-            flat_dict[f"{key} {key_counter[key]}"] = flat_value
-        else:
-            key_counter[key] += 1
-            flat_dict[f"{key} {key_counter[key]}"] = str(value)
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key.startswith("Section ") and "Sub-Section" not in key:
+                    # It's a top-level Section
+                    section_counter += 1
+                    sub_counter = 0
+                    section_label = f"Section {section_counter}"
+                    recurse(value, path=[section_label])
+                elif key.startswith("Sub-Section "):
+                    # It's a Sub-Section inside a Section
+                    sub_counter += 1
+                    sub_label = f"Sub-Section {section_counter}.{sub_counter}"
+                    recurse(value, path=path + [sub_label])
+                elif isinstance(value, dict):
+                    recurse(value, path=path + [key])
+                elif isinstance(value, list):
+                    joined = "\n".join(str(v) for v in value)
+                    final_key = " → ".join(path + [key])
+                    flat_dict[final_key] = joined
+                else:
+                    final_key = " → ".join(path + [key])
+                    flat_dict[final_key] = str(value)
 
-    _recurse(obj)
+        elif isinstance(node, list):
+            for item in node:
+                recurse(item, path=path)
+
+    recurse(obj)
     return flat_dict
 
 
