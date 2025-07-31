@@ -74,7 +74,7 @@ def process_typeform_submission(data):
         uk_tz = pytz.timezone("Europe/London")
         local_time = datetime.now(uk_tz)
         timestamp_str = local_time.strftime("%d-%m-%Y_%H-%M-%S")
-        file_path = f"JSON_Input_File/JSON_input_file_{timestamp_str}.tx
+        file_path = f"JSON_Input_File/JSON_input_file_{timestamp_str}.txt"
         logger.info(f"🧾 Final Supabase path: {file_path}")
 
         # Download file
