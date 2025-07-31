@@ -38,45 +38,40 @@ def flatten_json(obj):
     flat_dict = {}
     section_idx = 0  # e.g., 1, 2, 3
     sub_idx = 0      # e.g., 1.1, 1.2, etc.
+    
 
-from collections import defaultdict
-
-def flatten_json_by_title_keys(obj):
+def flatten_json_structural(json_obj):
     flat_dict = {}
-    section_idx = 0
-    sub_section_idx = defaultdict(int)
+    section_counter = 0
 
-    def recurse(node, current_prefix=""):
+    def recurse(node, prefix="", level=0):
+        nonlocal section_counter
+
         if not isinstance(node, dict):
             return
 
-        # If this dict starts a new Section
-        if "Section Title" in node:
-            section_idx += 1
-            sub_section_idx[section_idx] = 0
-            current_prefix = str(section_idx)
-
-        # If this dict starts a new Sub-Section
-        elif "Sub-Section Title" in node:
-            sub_section_idx[section_idx] += 1
-            current_prefix = f"{section_idx}.{sub_section_idx[section_idx]}"
-
+        local_counter = 0
         for key, value in node.items():
             if isinstance(value, dict):
-                recurse(value, current_prefix)
+                if level == 0:
+                    section_counter += 1
+                    next_prefix = str(section_counter)
+                elif level == 1:
+                    local_counter += 1
+                    next_prefix = f"{prefix}.{local_counter}"
+                else:
+                    # Ignore anything deeper than 2 levels
+                    next_prefix = prefix
+                recurse(value, next_prefix, level + 1)
             elif isinstance(value, list):
                 joined = "\n".join(str(v) for v in value)
-                flat_dict[f"{current_prefix} {key}"] = joined
+                flat_dict[f"{prefix} {key}"] = joined
             else:
-                flat_dict[f"{current_prefix} {key}"] = str(value) if value is not None else ""
+                flat_dict[f"{prefix} {key}"] = str(value) if value is not None else ""
 
-    # Begin with the root dict
-    for _, content in obj.items():
-        if isinstance(content, dict):
-            recurse(content)
-
+    recurse(json_obj, "", 0)
     return flat_dict
-
+    
 
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to CSV conversion")
