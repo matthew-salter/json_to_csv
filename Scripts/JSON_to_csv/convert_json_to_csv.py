@@ -1,6 +1,5 @@
 import os
 import json
-import csv
 import re
 from datetime import datetime
 from io import BytesIO
@@ -40,8 +39,7 @@ def split_multiple_jsons(text):
         block = block.strip()
         if block:
             try:
-                json_obj = json.loads(block)
-                snippets.append(json_obj)
+                snippets.append(json.loads(block))
             except json.JSONDecodeError:
                 logger.warning("⚠️ Skipping invalid JSON block.")
     return snippets
