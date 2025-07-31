@@ -4,12 +4,10 @@ import csv
 from datetime import datetime
 from io import StringIO
 from collections import defaultdict
-
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
-
 
 # 🔹 Setup Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -17,7 +15,6 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = "panelitix"
 SUPABASE_FOLDER = "JSON_to_csv/JSON_Input_File"
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
-
 
 def get_latest_input_file() -> str:
     logger.info("📂 Scanning Supabase input folder for .txt files...")
@@ -34,12 +31,27 @@ def get_latest_input_file() -> str:
         logger.error(f"❌ Failed to list Supabase folder: {e}")
         raise
 
+def split_multiple_jsons(text):
+    snippets = []
+    buffer = []
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            buffer = [line]
+        elif line.endswith("}"):
+            buffer.append(line)
+            joined = "\n".join(buffer)
+            try:
+                snippets.append(json.loads(joined))
+            except json.JSONDecodeError:
+                pass  # skip bad json
+        elif buffer:
+            buffer.append(line)
+    return snippets
 
-def flatten_json(obj, key_counter=None, flat_dict=None):
-    if flat_dict is None:
-        flat_dict = {}
-    if key_counter is None:
-        key_counter = defaultdict(int)
+def flatten_json(obj, key_counter=None):
+    flat_dict = {}
+    key_counter = key_counter or defaultdict(int)
 
     def _recurse(item):
         if isinstance(item, dict):
@@ -63,11 +75,9 @@ def flatten_json(obj, key_counter=None, flat_dict=None):
     _recurse(obj)
     return flat_dict
 
-
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to CSV conversion")
 
-    # 🔹 Step 1: Locate latest input file
     try:
         input_filename = get_latest_input_file()
     except Exception as e:
@@ -75,7 +85,6 @@ def convert_json_to_csv(_: dict) -> dict:
 
     logger.info(f"📥 Input filename selected: {input_filename}")
 
-    # 🔹 Step 2: Read file content from Supabase
     try:
         txt_content = read_supabase_file(f"JSON_Input_File/{input_filename}")
     except Exception as e:
@@ -84,33 +93,33 @@ def convert_json_to_csv(_: dict) -> dict:
 
     logger.info(f"📄 Original file content preview:\n{txt_content[:200]}")
 
-    # 🔹 Step 3: Attempt to parse JSON
     try:
-        json_data = json.loads(txt_content)
-    except json.JSONDecodeError as e:
-        logger.error(f"❌ JSON decoding failed: {e}")
-        return {"error": f"Invalid JSON: {e}"}
-
-    # 🔹 Step 4: Flatten JSON to asset-title: content pairs
-    try:
-        flattened = flatten_json(json_data)
-        if not flattened:
-            raise ValueError("No key-value pairs extracted from JSON.")
-        logger.info(f"🔍 Extracted {len(flattened)} asset pairs")
+        json_objects = split_multiple_jsons(txt_content)
+        if not json_objects:
+            raise ValueError("No valid JSON objects found in file.")
     except Exception as e:
-        logger.error(f"❌ Failed to flatten JSON: {e}")
-        return {"error": f"Unable to flatten JSON: {e}"}
+        logger.error(f"❌ Failed to parse multiple JSON objects: {e}")
+        return {"error": f"Invalid JSON structure: {e}"}
 
-    # 🔹 Step 5: Write full CSV with headers and content
-    csv_buffer = StringIO()
-    csv_writer = csv.writer(csv_buffer)
-    headers = list(flattened.keys())
-    values = [flattened[key] for key in headers]
-    csv_writer.writerow(headers)
-    csv_writer.writerow(values)
-    full_csv = csv_buffer.getvalue()
+    try:
+        rows = []
+        key_counter = defaultdict(int)
+        for obj in json_objects:
+            flat = flatten_json(obj, key_counter)
+            rows.append(flat)
 
-    # 🔹 Step 6: Timestamp from input filename
+        all_keys = sorted(set(k for row in rows for k in row.keys()))
+        csv_buffer = StringIO()
+        csv_writer = csv.writer(csv_buffer)
+        csv_writer.writerow(all_keys)
+        for row in rows:
+            csv_writer.writerow([row.get(k, "") for k in all_keys])
+
+        full_csv = csv_buffer.getvalue()
+    except Exception as e:
+        logger.error(f"❌ Failed to flatten and write CSV: {e}")
+        return {"error": f"Flattening or CSV error: {e}"}
+
     try:
         basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
         if not basename:
@@ -123,7 +132,6 @@ def convert_json_to_csv(_: dict) -> dict:
     output_filename = f"csv_output_file_{timestamp_str}.csv"
     output_path = f"csv_Output_File/{output_filename}"
 
-    # 🔹 Step 7: Write to Supabase
     try:
         write_supabase_file(output_path, full_csv)
     except Exception as e:
@@ -133,7 +141,5 @@ def convert_json_to_csv(_: dict) -> dict:
     logger.info(f"✅ CSV written successfully to: {output_path}")
     return {"status": "success", "csv_path": output_path}
 
-
-# 🔹 Required by main.py dispatcher
 def run_prompt(payload: dict) -> dict:
     return convert_json_to_csv(payload)
