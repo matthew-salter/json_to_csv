@@ -1,9 +1,9 @@
 import os
 import json
+import csv
 from datetime import datetime
-from io import BytesIO
+from io import StringIO
 from collections import defaultdict
-import xlsxwriter
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
@@ -31,50 +31,43 @@ def get_latest_input_file() -> str:
         logger.error(f"❌ Failed to list Supabase folder: {e}")
         raise
 
-def extract_json_blocks(text):
-    blocks = []
-    current_block = []
-    inside_json = False
-    brace_count = 0
-
+def split_multiple_jsons(text):
+    snippets = []
+    buffer = []
+    in_json = False
     for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            inside_json = True
-            brace_count = line.count("{") - line.count("}")
-            current_block = [line]
-        elif inside_json:
-            brace_count += line.count("{") - line.count("}")
-            current_block.append(line)
-            if brace_count == 0:
-                block_text = "\n".join(current_block)
-                try:
-                    blocks.append(json.loads(block_text))
-                except json.JSONDecodeError:
-                    logger.warning("⚠️ Skipping invalid JSON block.")
-                inside_json = False
-                current_block = []
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            buffer = [stripped]
+            in_json = True
+        elif stripped.endswith("}") and in_json:
+            buffer.append(stripped)
+            joined = "\n".join(buffer)
+            try:
+                snippets.append(json.loads(joined))
+            except json.JSONDecodeError:
+                logger.warning("⚠️ Skipping invalid JSON block.")
+            buffer = []
+            in_json = False
+        elif in_json:
+            buffer.append(stripped)
+    return snippets
 
-    return blocks
+def flatten_json(obj, key_counter=None):
+    flat_dict = {}
+    key_counter = key_counter or defaultdict(int)
 
-def flatten_json(obj, key_counter=None, flat_dict=None):
-    if flat_dict is None:
-        flat_dict = {}
-    if key_counter is None:
-        key_counter = defaultdict(int)
-
-    def _recurse(item, prefix=""):
+    def _recurse(item):
         if isinstance(item, dict):
             for key, value in item.items():
-                new_key = f"{prefix}{key}" if prefix == "" else f"{prefix} {key}"
-                _handle_kv(new_key, value)
+                _handle_kv(key, value)
         elif isinstance(item, list):
-            for i, sub_item in enumerate(item):
-                _recurse(sub_item, f"{prefix}[{i}]")
+            for sub_item in item:
+                _recurse(sub_item)
 
     def _handle_kv(key, value):
         if isinstance(value, dict):
-            _recurse(value, prefix=key)
+            _recurse(value)
         elif isinstance(value, list):
             flat_value = "\n".join(str(v) for v in value)
             key_counter[key] += 1
@@ -87,7 +80,7 @@ def flatten_json(obj, key_counter=None, flat_dict=None):
     return flat_dict
 
 def convert_json_to_csv(_: dict) -> dict:
-    logger.info("🚀 Starting JSON to XLSX conversion")
+    logger.info("🚀 Starting JSON to CSV conversion")
 
     try:
         input_filename = get_latest_input_file()
@@ -105,35 +98,31 @@ def convert_json_to_csv(_: dict) -> dict:
     logger.info(f"📄 Original file content preview:\n{txt_content[:200]}")
 
     try:
-        json_blocks = extract_json_blocks(txt_content)
-        if not json_blocks:
+        json_objects = split_multiple_jsons(txt_content)
+        if not json_objects:
             raise ValueError("No valid JSON objects found in file.")
+    except Exception as e:
+        logger.error(f"❌ Failed to parse multiple JSON objects: {e}")
+        return {"error": f"Invalid JSON structure: {e}"}
 
+    try:
         rows = []
         key_counter = defaultdict(int)
-        for obj in json_blocks:
-            flat = flatten_json(obj, key_counter=key_counter)
+        for obj in json_objects:
+            flat = flatten_json(obj, key_counter)
             rows.append(flat)
 
         all_keys = sorted(set(k for row in rows for k in row.keys()))
+        csv_buffer = StringIO(newline="")
+        csv_writer = csv.writer(csv_buffer)
+        csv_writer.writerow(all_keys)
+        for row in rows:
+            csv_writer.writerow([row.get(k, "") for k in all_keys])
 
-        output_stream = BytesIO()
-        workbook = xlsxwriter.Workbook(output_stream, {'in_memory': True})
-        worksheet = workbook.add_worksheet()
-
-        for col, key in enumerate(all_keys):
-            worksheet.write(0, col, key)
-        for row_idx, row in enumerate(rows, 1):
-            for col_idx, key in enumerate(all_keys):
-                worksheet.write(row_idx, col_idx, row.get(key, ""))
-
-        workbook.close()
-        output_stream.seek(0)
-        full_xlsx = output_stream.read()
-
+        full_csv = csv_buffer.getvalue()
     except Exception as e:
-        logger.error(f"❌ Failed to flatten and write XLSX: {e}")
-        return {"error": f"Flattening or XLSX error: {e}"}
+        logger.error(f"❌ Failed to flatten and write CSV: {e}")
+        return {"error": f"Flattening or CSV error: {e}"}
 
     try:
         basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
@@ -144,16 +133,16 @@ def convert_json_to_csv(_: dict) -> dict:
         logger.warning(f"⚠️ Failed to parse timestamp from input filename: {e}")
         timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
 
-    output_filename = f"xlsx_output_file_{timestamp_str}.xlsx"
+    output_filename = f"csv_output_file_{timestamp_str}.csv"
     output_path = f"csv_Output_File/{output_filename}"
 
     try:
-        write_supabase_file(output_path, full_xlsx)
+        write_supabase_file(output_path, full_csv.encode("utf-8"))
     except Exception as e:
-        logger.error(f"❌ Failed to write XLSX file: {e}")
+        logger.error(f"❌ Failed to write CSV file: {e}")
         return {"error": str(e)}
 
-    logger.info(f"✅ XLSX written successfully to: {output_path}")
+    logger.info(f"✅ CSV written successfully to: {output_path}")
     return {"status": "success", "csv_path": output_path}
 
 def run_prompt(payload: dict) -> dict:
