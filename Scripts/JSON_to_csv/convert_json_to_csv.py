@@ -37,39 +37,20 @@ def get_latest_input_file() -> str:
 
 def flatten_json(obj):
     flat_dict = {}
-    section_counter = 0
 
-    def recurse(node, path=None, sub_counter=0):
-        nonlocal section_counter
-        if path is None:
-            path = []
-
+    def recurse(node, prefix=[]):
         if isinstance(node, dict):
-            for key, value in node.items():
-                if key.startswith("Section ") and "Sub-Section" not in key:
-                    # It's a top-level Section
-                    section_counter += 1
-                    sub_counter = 0
-                    section_label = f"Section {section_counter}"
-                    recurse(value, path=[section_label])
-                elif key.startswith("Sub-Section "):
-                    # It's a Sub-Section inside a Section
-                    sub_counter += 1
-                    sub_label = f"Sub-Section {section_counter}.{sub_counter}"
-                    recurse(value, path=path + [sub_label])
-                elif isinstance(value, dict):
-                    recurse(value, path=path + [key])
-                elif isinstance(value, list):
-                    joined = "\n".join(str(v) for v in value)
-                    final_key = " → ".join(path + [key])
-                    flat_dict[final_key] = joined
-                else:
-                    final_key = " → ".join(path + [key])
-                    flat_dict[final_key] = str(value)
-
+            for idx, (key, value) in enumerate(node.items(), 1):
+                new_prefix = prefix + [str(idx)]
+                recurse(value, new_prefix + [key])
         elif isinstance(node, list):
-            for item in node:
-                recurse(item, path=path)
+            for idx, item in enumerate(node, 1):
+                new_prefix = prefix + [str(idx)]
+                recurse(item, new_prefix)
+        else:
+            # Base case: value is scalar or null
+            key_path = " → ".join(prefix)
+            flat_dict[key_path] = str(node) if node is not None else ""
 
     recurse(obj)
     return flat_dict
