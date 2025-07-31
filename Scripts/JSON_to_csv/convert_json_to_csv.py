@@ -34,19 +34,23 @@ def get_latest_input_file() -> str:
 def split_multiple_jsons(text):
     snippets = []
     buffer = []
+    in_json = False
     for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            buffer = [line]
-        elif line.endswith("}"):
-            buffer.append(line)
+        stripped = line.strip()
+        if stripped.startswith("{"):
+            buffer = [stripped]
+            in_json = True
+        elif stripped.endswith("}") and in_json:
+            buffer.append(stripped)
             joined = "\n".join(buffer)
             try:
                 snippets.append(json.loads(joined))
             except json.JSONDecodeError:
-                pass  # skip bad json
-        elif buffer:
-            buffer.append(line)
+                logger.warning("⚠️ Skipping invalid JSON block.")
+            buffer = []
+            in_json = False
+        elif in_json:
+            buffer.append(stripped)
     return snippets
 
 def flatten_json(obj, key_counter=None):
@@ -109,7 +113,7 @@ def convert_json_to_csv(_: dict) -> dict:
             rows.append(flat)
 
         all_keys = sorted(set(k for row in rows for k in row.keys()))
-        csv_buffer = StringIO()
+        csv_buffer = StringIO(newline="")
         csv_writer = csv.writer(csv_buffer)
         csv_writer.writerow(all_keys)
         for row in rows:
@@ -133,7 +137,7 @@ def convert_json_to_csv(_: dict) -> dict:
     output_path = f"csv_Output_File/{output_filename}"
 
     try:
-        write_supabase_file(output_path, full_csv)
+        write_supabase_file(output_path, full_csv.encode("utf-8"))
     except Exception as e:
         logger.error(f"❌ Failed to write CSV file: {e}")
         return {"error": str(e)}
