@@ -32,7 +32,7 @@ BLOCKING_PROMPTS = {
 }
 
 PROMPT_MODULES = {
-    "JSON_to_csv": "Scripts.JSON_to_csv.convert_json_to_csv.py"
+    "JSON_to_csv": "Scripts.JSON_to_csv.convert_json_to_csv"
 }
 
 # --- ZAPIER/JSON DISPATCH ROUTE ---
