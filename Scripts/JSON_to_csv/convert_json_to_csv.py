@@ -1,9 +1,9 @@
 import os
 import json
-import csv
 from datetime import datetime
-from io import StringIO
+from io import BytesIO
 from collections import defaultdict
+import xlsxwriter
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
@@ -44,7 +44,7 @@ def split_multiple_jsons(text):
             try:
                 snippets.append(json.loads(joined))
             except json.JSONDecodeError:
-                pass  # skip bad json
+                pass
         elif buffer:
             buffer.append(line)
     return snippets
@@ -76,7 +76,7 @@ def flatten_json(obj, key_counter=None):
     return flat_dict
 
 def convert_json_to_csv(_: dict) -> dict:
-    logger.info("🚀 Starting JSON to CSV conversion")
+    logger.info("🚀 Starting JSON to XLSX conversion")
 
     try:
         input_filename = get_latest_input_file()
@@ -109,16 +109,22 @@ def convert_json_to_csv(_: dict) -> dict:
             rows.append(flat)
 
         all_keys = sorted(set(k for row in rows for k in row.keys()))
-        csv_buffer = StringIO()
-        csv_writer = csv.writer(csv_buffer)
-        csv_writer.writerow(all_keys)
-        for row in rows:
-            csv_writer.writerow([row.get(k, "") for k in all_keys])
+        output_stream = BytesIO()
+        workbook = xlsxwriter.Workbook(output_stream, {'in_memory': True})
+        worksheet = workbook.add_worksheet()
 
-        full_csv = csv_buffer.getvalue()
+        for col, key in enumerate(all_keys):
+            worksheet.write(0, col, key)
+        for row_idx, row in enumerate(rows, 1):
+            for col_idx, key in enumerate(all_keys):
+                worksheet.write(row_idx, col_idx, row.get(key, ""))
+
+        workbook.close()
+        output_stream.seek(0)
+        full_xlsx = output_stream.read()
     except Exception as e:
-        logger.error(f"❌ Failed to flatten and write CSV: {e}")
-        return {"error": f"Flattening or CSV error: {e}"}
+        logger.error(f"❌ Failed to flatten and write XLSX: {e}")
+        return {"error": f"Flattening or XLSX error: {e}"}
 
     try:
         basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
@@ -129,16 +135,16 @@ def convert_json_to_csv(_: dict) -> dict:
         logger.warning(f"⚠️ Failed to parse timestamp from input filename: {e}")
         timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
 
-    output_filename = f"csv_output_file_{timestamp_str}.csv"
+    output_filename = f"xlsx_output_file_{timestamp_str}.xlsx"
     output_path = f"csv_Output_File/{output_filename}"
 
     try:
-        write_supabase_file(output_path, full_csv)
+        write_supabase_file(output_path, full_xlsx)
     except Exception as e:
-        logger.error(f"❌ Failed to write CSV file: {e}")
+        logger.error(f"❌ Failed to write XLSX file: {e}")
         return {"error": str(e)}
 
-    logger.info(f"✅ CSV written successfully to: {output_path}")
+    logger.info(f"✅ XLSX written successfully to: {output_path}")
     return {"status": "success", "csv_path": output_path}
 
 def run_prompt(payload: dict) -> dict:
