@@ -4,7 +4,6 @@ import csv
 from datetime import datetime
 from io import StringIO
 from collections import defaultdict
-
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
@@ -40,35 +39,42 @@ def flatten_json(obj):
     section_idx = 0  # e.g., 1, 2, 3
     sub_idx = 0      # e.g., 1.1, 1.2, etc.
 
-    def recurse(node, prefix=""):
-        nonlocal section_idx, sub_idx
+from collections import defaultdict
 
-        if isinstance(node, dict):
-            for key, value in node.items():
-                # Detect Section (top-level key like "Section 1", "Section 2", etc.)
-                if isinstance(value, dict) and key.lower().startswith("section "):
-                    section_idx += 1
-                    sub_idx = 0
-                    recurse(value, prefix=str(section_idx))
-                # Detect Sub-Section inside Section
-                elif isinstance(value, dict) and key.lower().startswith("sub-section"):
-                    sub_idx += 1
-                    sub_prefix = f"{section_idx}.{sub_idx}"
-                    recurse(value, prefix=sub_prefix)
-                # Recurse into any other nested dict
-                elif isinstance(value, dict):
-                    recurse(value, prefix=prefix)
-                # Array: flatten into newline-separated string
-                elif isinstance(value, list):
-                    joined = "\n".join(str(v) for v in value)
-                    flat_dict[f"{prefix} {key}"] = joined
-                # Scalar: assign directly
-                else:
-                    flat_dict[f"{prefix} {key}"] = str(value) if value is not None else ""
-        else:
-            flat_dict[prefix] = str(node) if node is not None else ""
+def flatten_json_by_title_keys(obj):
+    flat_dict = {}
+    section_idx = 0
+    sub_section_idx = defaultdict(int)
 
-    recurse(obj)
+    def recurse(node, current_prefix=""):
+        if not isinstance(node, dict):
+            return
+
+        # If this dict starts a new Section
+        if "Section Title" in node:
+            section_idx += 1
+            sub_section_idx[section_idx] = 0
+            current_prefix = str(section_idx)
+
+        # If this dict starts a new Sub-Section
+        elif "Sub-Section Title" in node:
+            sub_section_idx[section_idx] += 1
+            current_prefix = f"{section_idx}.{sub_section_idx[section_idx]}"
+
+        for key, value in node.items():
+            if isinstance(value, dict):
+                recurse(value, current_prefix)
+            elif isinstance(value, list):
+                joined = "\n".join(str(v) for v in value)
+                flat_dict[f"{current_prefix} {key}"] = joined
+            else:
+                flat_dict[f"{current_prefix} {key}"] = str(value) if value is not None else ""
+
+    # Begin with the root dict
+    for _, content in obj.items():
+        if isinstance(content, dict):
+            recurse(content)
+
     return flat_dict
 
 
