@@ -1,6 +1,5 @@
 import os
 import json
-import re
 from datetime import datetime
 from io import BytesIO
 from collections import defaultdict
@@ -32,33 +31,50 @@ def get_latest_input_file() -> str:
         logger.error(f"❌ Failed to list Supabase folder: {e}")
         raise
 
-def split_multiple_jsons(text):
-    blocks = re.split(r'(?<=\})\s*(?=\d+\.?\s*\n?\{)', text.strip())
-    snippets = []
-    for block in blocks:
-        block = block.strip()
-        if block:
-            try:
-                snippets.append(json.loads(block))
-            except json.JSONDecodeError:
-                logger.warning("⚠️ Skipping invalid JSON block.")
-    return snippets
+def extract_json_blocks(text):
+    blocks = []
+    current_block = []
+    inside_json = False
+    brace_count = 0
 
-def flatten_json(obj, key_counter=None):
-    flat_dict = {}
-    key_counter = key_counter or defaultdict(int)
+    for line in text.splitlines():
+        line = line.strip()
+        if line.startswith("{"):
+            inside_json = True
+            brace_count = line.count("{") - line.count("}")
+            current_block = [line]
+        elif inside_json:
+            brace_count += line.count("{") - line.count("}")
+            current_block.append(line)
+            if brace_count == 0:
+                block_text = "\n".join(current_block)
+                try:
+                    blocks.append(json.loads(block_text))
+                except json.JSONDecodeError:
+                    logger.warning("⚠️ Skipping invalid JSON block.")
+                inside_json = False
+                current_block = []
 
-    def _recurse(item):
+    return blocks
+
+def flatten_json(obj, key_counter=None, flat_dict=None):
+    if flat_dict is None:
+        flat_dict = {}
+    if key_counter is None:
+        key_counter = defaultdict(int)
+
+    def _recurse(item, prefix=""):
         if isinstance(item, dict):
             for key, value in item.items():
-                _handle_kv(key, value)
+                new_key = f"{prefix}{key}" if prefix == "" else f"{prefix} {key}"
+                _handle_kv(new_key, value)
         elif isinstance(item, list):
-            for sub_item in item:
-                _recurse(sub_item)
+            for i, sub_item in enumerate(item):
+                _recurse(sub_item, f"{prefix}[{i}]")
 
     def _handle_kv(key, value):
         if isinstance(value, dict):
-            _recurse(value)
+            _recurse(value, prefix=key)
         elif isinstance(value, list):
             flat_value = "\n".join(str(v) for v in value)
             key_counter[key] += 1
@@ -89,18 +105,14 @@ def convert_json_to_csv(_: dict) -> dict:
     logger.info(f"📄 Original file content preview:\n{txt_content[:200]}")
 
     try:
-        json_objects = split_multiple_jsons(txt_content)
-        if not json_objects:
+        json_blocks = extract_json_blocks(txt_content)
+        if not json_blocks:
             raise ValueError("No valid JSON objects found in file.")
-    except Exception as e:
-        logger.error(f"❌ Failed to parse multiple JSON objects: {e}")
-        return {"error": f"Invalid JSON structure: {e}"}
 
-    try:
         rows = []
         key_counter = defaultdict(int)
-        for obj in json_objects:
-            flat = flatten_json(obj, key_counter)
+        for obj in json_blocks:
+            flat = flatten_json(obj, key_counter=key_counter)
             rows.append(flat)
 
         all_keys = sorted(set(k for row in rows for k in row.keys()))
