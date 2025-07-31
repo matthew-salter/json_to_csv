@@ -70,8 +70,8 @@ def process_typeform_submission(data):
             raise ValueError("❌ Missing required field: JSON file URL")
 
         # Build Supabase path
-        date_str = datetime.utcnow().strftime("%d-%m-%Y")
-        file_path = f"JSON_Input_File/JSON_input_file_{date_str}.txt"
+        timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
+        file_path = f"JSON_Input_File/JSON_input_file_{timestamp_str}.txt"
         logger.info(f"🧾 Final Supabase path: {file_path}")
 
         # Download file
