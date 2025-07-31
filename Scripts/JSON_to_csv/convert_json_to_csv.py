@@ -1,6 +1,7 @@
 import os
 import json
 import csv
+import re
 from datetime import datetime
 from io import BytesIO
 from collections import defaultdict
@@ -33,25 +34,16 @@ def get_latest_input_file() -> str:
         raise
 
 def split_multiple_jsons(text):
+    blocks = re.split(r'(?<=\})\s*(?=\d+\.?\s*\n?\{)', text.strip())
     snippets = []
-    buffer = []
-    in_json = False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("{"):
-            buffer = [stripped]
-            in_json = True
-        elif stripped.endswith("}") and in_json:
-            buffer.append(stripped)
-            joined = "\n".join(buffer)
+    for block in blocks:
+        block = block.strip()
+        if block:
             try:
-                snippets.append(json.loads(joined))
+                json_obj = json.loads(block)
+                snippets.append(json_obj)
             except json.JSONDecodeError:
                 logger.warning("⚠️ Skipping invalid JSON block.")
-            buffer = []
-            in_json = False
-        elif in_json:
-            buffer.append(stripped)
     return snippets
 
 def flatten_json(obj, key_counter=None):
@@ -156,4 +148,3 @@ def convert_json_to_csv(_: dict) -> dict:
 
 def run_prompt(payload: dict) -> dict:
     return convert_json_to_csv(payload)
-
