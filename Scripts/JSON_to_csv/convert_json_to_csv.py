@@ -4,21 +4,46 @@ import csv
 from datetime import datetime
 from io import StringIO
 
+from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
 
 
-def convert_json_to_csv(payload: dict) -> dict:
+# 🔹 Setup Supabase client
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
+SUPABASE_BUCKET = "panelitix"
+SUPABASE_FOLDER = "JSON_to_csv/JSON_Input_File"
+supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+
+def get_latest_input_file() -> str:
+    logger.info("📂 Scanning Supabase input folder for .txt files...")
+    try:
+        response = supabase.storage.from_(SUPABASE_BUCKET).list(SUPABASE_FOLDER)
+        txt_files = [f["name"] for f in response if f["name"].endswith(".txt")]
+        if not txt_files:
+            raise FileNotFoundError("No .txt files found in input folder.")
+        txt_files.sort(reverse=True)  # most recent timestamped filename first
+        latest = txt_files[0]
+        logger.info(f"🕒 Latest input file detected: {latest}")
+        return latest
+    except Exception as e:
+        logger.error(f"❌ Failed to list Supabase folder: {e}")
+        raise
+
+
+def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to CSV conversion")
 
-    # 🔹 Step 1: Extract file name from payload
-    input_filename = payload.get("file_name")
-    if not input_filename:
-        logger.error("❌ No file_name provided in payload.")
-        return {"error": "file_name not provided"}
+    # 🔹 Step 1: Locate latest input file by timestamped filename
+    try:
+        input_filename = get_latest_input_file()
+    except Exception as e:
+        return {"error": str(e)}
 
-    logger.info(f"📥 Input filename: {input_filename}")
+    logger.info(f"📥 Input filename selected: {input_filename}")
 
     # 🔹 Step 2: Read file content from Supabase
     try:
@@ -55,12 +80,11 @@ def convert_json_to_csv(payload: dict) -> dict:
     sample_csv = csv_buffer.getvalue()
 
     # 🔹 Step 6: Use exact timestamp from input filename
-    # e.g. from 'JSON_input_file_31-07-2025_11-44-02.txt' → '31-07-2025_11-44-02'
     try:
         basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
         if not basename:
             raise ValueError("Empty timestamp extracted from filename.")
-        timestamp_str = basename  # use as-is
+        timestamp_str = basename
     except Exception as e:
         logger.warning(f"⚠️ Failed to parse timestamp from input filename: {e}")
         timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
