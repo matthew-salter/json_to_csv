@@ -5,3 +5,4 @@ gunicorn
 requests
 supabase
 PyYAML
+pytz
