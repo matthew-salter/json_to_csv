@@ -114,7 +114,16 @@ def convert_json_to_csv(_: dict) -> dict:
             flat = flatten_json(obj, key_counter)
             rows.append(flat)
 
-        all_keys = sorted(set(k for row in rows for k in row.keys()))
+        seen_keys = set()
+        ordered_keys = []
+
+        for row in rows:
+            for key in row.keys():
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    ordered_keys.append(key)
+
+        all_keys = ordered_keys
         output_stream = BytesIO()
         workbook = xlsxwriter.Workbook(output_stream, {'in_memory': True})
         worksheet = workbook.add_worksheet()
