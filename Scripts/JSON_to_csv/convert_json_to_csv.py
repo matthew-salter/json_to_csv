@@ -49,9 +49,12 @@ def split_multiple_jsons(text):
             buffer.append(line)
     return snippets
 
-def flatten_json(obj, key_counter=None):
+def flatten_json(obj, global_key_count=None):
     flat_dict = {}
-    key_counter = key_counter or defaultdict(int)
+    global_key_count = global_key_count or defaultdict(int)
+
+    def format_key(key: str) -> str:
+        return key.strip().lower().replace(" ", "_").replace("-", "_")
 
     def _recurse(item):
         if isinstance(item, dict):
@@ -62,21 +65,26 @@ def flatten_json(obj, key_counter=None):
                 _recurse(sub_item)
 
     def _handle_kv(key, value):
+        formatted_key = format_key(key)
+        global_key_count[formatted_key] += 1
+        count = global_key_count[formatted_key]
+
+        # Use suffix if key has duplicates
+        final_key = (
+            formatted_key if count == 1 else f"{formatted_key}_{count}"
+        )
+
         if isinstance(value, dict):
             _recurse(value)
         elif isinstance(value, list):
-            # Join list items with literal '\n'
             flat_value = "\\n".join(
                 str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
                 for v in value
             )
-            key_counter[key] += 1
-            flat_dict[f"{key} {key_counter[key]}"] = flat_value
+            flat_dict[final_key] = flat_value
         else:
-            # Convert actual newlines in strings to literal '\n'
             safe_value = str(value).replace("\n", "\\n")
-            key_counter[key] += 1
-            flat_dict[f"{key} {key_counter[key]}"] = safe_value
+            flat_dict[final_key] = safe_value
 
     _recurse(obj)
     return flat_dict
