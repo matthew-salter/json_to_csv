@@ -54,39 +54,53 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
     global_key_tracker = global_key_tracker or defaultdict(int)
     global_key_total = global_key_total or {}
 
+    current_section = 0
+    sub_counters = defaultdict(int)
+
     def format_key(key: str) -> str:
         return key.strip().lower().replace(" ", "_").replace("-", "_")
 
     def _recurse(item):
+        nonlocal current_section
+
         if isinstance(item, dict):
             for key, value in item.items():
-                _handle_kv(key, value)
+                formatted_key = format_key(key)
+
+                # Section title triggers new section context
+                if formatted_key == "section_title":
+                    current_section += 1
+                    sub_counters[current_section] = 0
+
+                global_key_tracker[formatted_key] += 1
+                index = global_key_tracker[formatted_key]
+                total_count = global_key_total.get(formatted_key, 1)
+
+                # Handle key naming
+                if "sub_" in formatted_key:
+                    sub_counters[current_section] += 1
+                    final_key = f"{formatted_key}_{current_section}.{sub_counters[current_section]}"
+                elif total_count == 1:
+                    final_key = formatted_key
+                else:
+                    final_key = f"{formatted_key}_{index}"
+
+                if isinstance(value, dict):
+                    nested_flat = flatten_json(value, global_key_tracker, global_key_total)
+                    for nested_k, nested_v in nested_flat.items():
+                        flat_dict[nested_k] = nested_v
+                elif isinstance(value, list):
+                    flat_value = "\\n".join(
+                        str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
+                        for v in value
+                    )
+                    flat_dict[final_key] = flat_value
+                else:
+                    safe_value = str(value).replace("\n", "\\n")
+                    flat_dict[final_key] = safe_value
         elif isinstance(item, list):
             for sub_item in item:
                 _recurse(sub_item)
-
-    def _handle_kv(key, value):
-        formatted_key = format_key(key)
-        global_key_tracker[formatted_key] += 1
-        index = global_key_tracker[formatted_key]
-        total_count = global_key_total.get(formatted_key, 1)
-
-        if total_count == 1:
-            final_key = formatted_key
-        else:
-            final_key = f"{formatted_key}_{index}"
-
-        if isinstance(value, dict):
-            _recurse(value)
-        elif isinstance(value, list):
-            flat_value = "\\n".join(
-                str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
-                for v in value
-            )
-            flat_dict[final_key] = flat_value
-        else:
-            safe_value = str(value).replace("\n", "\\n")
-            flat_dict[final_key] = safe_value
 
     _recurse(obj)
     return flat_dict
