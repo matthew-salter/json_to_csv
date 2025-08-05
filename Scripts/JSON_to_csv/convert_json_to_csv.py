@@ -2,7 +2,7 @@ import os
 import json
 from datetime import datetime
 from io import BytesIO
-from collections import defaultdict
+from collections import defaultdict, Counter
 import xlsxwriter
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
@@ -49,9 +49,10 @@ def split_multiple_jsons(text):
             buffer.append(line)
     return snippets
 
-def flatten_json(obj, global_key_count=None):
+def flatten_json(obj, global_key_tracker=None, global_key_total=None):
     flat_dict = {}
-    global_key_count = global_key_count or defaultdict(int)
+    global_key_tracker = global_key_tracker or defaultdict(int)
+    global_key_total = global_key_total or {}
 
     def format_key(key: str) -> str:
         return key.strip().lower().replace(" ", "_").replace("-", "_")
@@ -66,13 +67,14 @@ def flatten_json(obj, global_key_count=None):
 
     def _handle_kv(key, value):
         formatted_key = format_key(key)
-        global_key_count[formatted_key] += 1
-        count = global_key_count[formatted_key]
+        global_key_tracker[formatted_key] += 1
+        index = global_key_tracker[formatted_key]
+        total_count = global_key_total.get(formatted_key, 1)
 
-        # Use suffix if key has duplicates
-        final_key = (
-            formatted_key if count == 1 else f"{formatted_key}_{count}"
-        )
+        if total_count == 1:
+            final_key = formatted_key
+        else:
+            final_key = f"{formatted_key}_{index}"
 
         if isinstance(value, dict):
             _recurse(value)
@@ -88,6 +90,24 @@ def flatten_json(obj, global_key_count=None):
 
     _recurse(obj)
     return flat_dict
+
+def count_keys_across_all(json_objects):
+    key_counts = Counter()
+
+    def extract_keys(item):
+        if isinstance(item, dict):
+            for key, value in item.items():
+                formatted = key.strip().lower().replace(" ", "_").replace("-", "_")
+                key_counts[formatted] += 1
+                extract_keys(value)
+        elif isinstance(item, list):
+            for sub in item:
+                extract_keys(sub)
+
+    for obj in json_objects:
+        extract_keys(obj)
+
+    return key_counts
 
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
@@ -116,10 +136,12 @@ def convert_json_to_csv(_: dict) -> dict:
         return {"error": f"Invalid JSON structure: {e}"}
 
     try:
+        key_total_count = count_keys_across_all(json_objects)
+        key_tracker = defaultdict(int)
         rows = []
-        key_counter = defaultdict(int)
+
         for obj in json_objects:
-            flat = flatten_json(obj, key_counter)
+            flat = flatten_json(obj, key_tracker, key_total_count)
             rows.append(flat)
 
         seen_keys = set()
