@@ -65,12 +65,18 @@ def flatten_json(obj, key_counter=None):
         if isinstance(value, dict):
             _recurse(value)
         elif isinstance(value, list):
-            flat_value = "\n".join(str(v) for v in value)
+            # Join list items with literal '\n'
+            flat_value = "\\n".join(
+                str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
+                for v in value
+            )
             key_counter[key] += 1
             flat_dict[f"{key} {key_counter[key]}"] = flat_value
         else:
+            # Convert actual newlines in strings to literal '\n'
+            safe_value = str(value).replace("\n", "\\n")
             key_counter[key] += 1
-            flat_dict[f"{key} {key_counter[key]}"] = str(value)
+            flat_dict[f"{key} {key_counter[key]}"] = safe_value
 
     _recurse(obj)
     return flat_dict
