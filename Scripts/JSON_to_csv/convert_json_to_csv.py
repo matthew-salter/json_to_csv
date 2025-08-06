@@ -74,20 +74,26 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
 
     current_section = 0
     sub_counter = 0
+    current_sub_id = None
 
     def format_key(k):
         return k.strip().lower().replace(" ", "_").replace("-", "_")
 
-    def recurse(d, parent_section=None):
-        nonlocal current_section, sub_counter
+    def clean_value(v):
+        return str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
+
+    def recurse(d, parent_key=None):
+        nonlocal current_section, sub_counter, current_sub_id
 
         if isinstance(d, dict):
             for key, value in d.items():
                 f_key = format_key(key)
 
+                # SECTION logic
                 if f_key == "section_title":
                     current_section += 1
                     sub_counter = 0
+                    current_sub_id = None  # reset
                     global_key_tracker[f_key] += 1
                     count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
@@ -95,14 +101,16 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
                     flat_dict[col_name] = clean_value(value)
                     continue
 
+                # SUB-SECTION logic
                 if f_key == "sub_section_title":
                     sub_counter += 1
-                    col_name = f"{f_key}_{current_section}.{sub_counter}"
+                    current_sub_id = f"{current_section}.{sub_counter}"
+                    col_name = f"{f_key}_{current_sub_id}"
                     flat_dict[col_name] = clean_value(value)
                     continue
 
                 if isinstance(value, dict):
-                    recurse(value, parent_section=current_section)
+                    recurse(value, parent_key=f_key)
                 elif isinstance(value, list):
                     list_val = "\\n".join(
                         str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
@@ -111,21 +119,28 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
                     global_key_tracker[f_key] += 1
                     count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
-                    col_name = f"{f_key}_{count}" if total > 1 else f_key
+
+                    if f_key.startswith("sub_") and current_sub_id:
+                        col_name = f"{f_key}_{current_sub_id}"
+                    else:
+                        col_name = f"{f_key}_{count}" if total > 1 else f_key
+
                     flat_dict[col_name] = list_val
                 else:
                     global_key_tracker[f_key] += 1
                     count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
-                    col_name = f"{f_key}_{count}" if total > 1 else f_key
+
+                    if f_key.startswith("sub_") and current_sub_id:
+                        col_name = f"{f_key}_{current_sub_id}"
+                    else:
+                        col_name = f"{f_key}_{count}" if total > 1 else f_key
+
                     flat_dict[col_name] = clean_value(value)
 
         elif isinstance(d, list):
             for item in d:
                 recurse(item)
-
-    def clean_value(v):
-        return str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
 
     recurse(obj)
     return flat_dict
@@ -213,3 +228,4 @@ def convert_json_to_csv(_: dict) -> dict:
 
 def run_prompt(payload: dict) -> dict:
     return convert_json_to_csv(payload)
+
