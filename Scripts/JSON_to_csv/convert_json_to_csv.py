@@ -49,6 +49,48 @@ def split_multiple_jsons(text):
             buffer.append(line)
     return snippets
 
+def flatten_json(obj, global_key_tracker=None, global_key_total=None):
+    flat_dict = {}
+    global_key_tracker = global_key_tracker or defaultdict(int)
+    global_key_total = global_key_total or {}
+
+    def format_key(key: str) -> str:
+        return key.strip().lower().replace(" ", "_").replace("-", "_")
+
+    def _recurse(item):
+        if isinstance(item, dict):
+            for key, value in item.items():
+                _handle_kv(key, value)
+        elif isinstance(item, list):
+            for sub_item in item:
+                _recurse(sub_item)
+
+    def _handle_kv(key, value):
+        formatted_key = format_key(key)
+        global_key_tracker[formatted_key] += 1
+        index = global_key_tracker[formatted_key]
+        total_count = global_key_total.get(formatted_key, 1)
+
+        if total_count == 1:
+            final_key = formatted_key
+        else:
+            final_key = f"{formatted_key}_{index}"
+
+        if isinstance(value, dict):
+            _recurse(value)
+        elif isinstance(value, list):
+            flat_value = "\\n".join(
+                str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
+                for v in value
+            )
+            flat_dict[final_key] = flat_value
+        else:
+            safe_value = str(value).replace("\n", "\\n")
+            flat_dict[final_key] = safe_value
+
+    _recurse(obj)
+    return flat_dict
+
 def count_keys_across_all(json_objects):
     key_counts = Counter()
 
@@ -66,84 +108,6 @@ def count_keys_across_all(json_objects):
         extract_keys(obj)
 
     return key_counts
-
-def flatten_json(obj, global_key_tracker=None, global_key_total=None):
-    flat_dict = {}
-    global_key_tracker = global_key_tracker or defaultdict(int)
-    global_key_total = global_key_total or {}
-
-    current_section = 0
-    sub_counter = 0
-    current_sub_id = None
-
-    def format_key(k):
-        return k.strip().lower().replace(" ", "_").replace("-", "_")
-
-    def clean_value(v):
-        return str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
-
-    def recurse(d, parent_key=None):
-        nonlocal current_section, sub_counter, current_sub_id
-
-        if isinstance(d, dict):
-            for key, value in d.items():
-                f_key = format_key(key)
-
-                # SECTION logic
-                if f_key == "section_title":
-                    current_section += 1
-                    sub_counter = 0
-                    current_sub_id = None  # reset
-                    global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
-                    total = global_key_total.get(f_key, 1)
-                    col_name = f"{f_key}_{count}" if total > 1 else f_key
-                    flat_dict[col_name] = clean_value(value)
-                    continue
-
-                # SUB-SECTION logic
-                if f_key == "sub_section_title":
-                    sub_counter += 1
-                    current_sub_id = f"{current_section}.{sub_counter}"
-                    col_name = f"{f_key}_{current_sub_id}"
-                    flat_dict[col_name] = clean_value(value)
-                    continue
-
-                if isinstance(value, dict):
-                    recurse(value, parent_key=f_key)
-                elif isinstance(value, list):
-                    list_val = "\\n".join(
-                        str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
-                        for v in value
-                    )
-                    global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
-                    total = global_key_total.get(f_key, 1)
-
-                    if f_key.startswith("sub_") and current_sub_id:
-                        col_name = f"{f_key}_{current_sub_id}"
-                    else:
-                        col_name = f"{f_key}_{count}" if total > 1 else f_key
-
-                    flat_dict[col_name] = list_val
-                else:
-                    global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
-                    total = global_key_total.get(f_key, 1)
-
-                    if f_key.startswith("sub_") and current_sub_id:
-                        col_name = f"{f_key}_{current_sub_id}"
-                    else:
-                        col_name = f"{f_key}_{count}" if total > 1 else f_key
-
-                    flat_dict[col_name] = clean_value(value)
-
-        elif isinstance(d, list):
-            for item in d:
-                recurse(item)
-
-    recurse(obj)
-    return flat_dict
 
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
@@ -182,20 +146,22 @@ def convert_json_to_csv(_: dict) -> dict:
 
         seen_keys = set()
         ordered_keys = []
+
         for row in rows:
             for key in row.keys():
                 if key not in seen_keys:
                     seen_keys.add(key)
                     ordered_keys.append(key)
 
+        all_keys = ordered_keys
         output_stream = BytesIO()
         workbook = xlsxwriter.Workbook(output_stream, {'in_memory': True})
         worksheet = workbook.add_worksheet()
 
-        for col, key in enumerate(ordered_keys):
+        for col, key in enumerate(all_keys):
             worksheet.write(0, col, key)
         for row_idx, row in enumerate(rows, 1):
-            for col_idx, key in enumerate(ordered_keys):
+            for col_idx, key in enumerate(all_keys):
                 worksheet.write(row_idx, col_idx, row.get(key, ""))
 
         workbook.close()
