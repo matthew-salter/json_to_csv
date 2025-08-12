@@ -9,6 +9,9 @@ from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
 
+# 🔧 Toggle this to merge all JSONs into one row
+MERGE_JSON_SNIPPETS = True
+
 # 🔹 Setup Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -93,7 +96,7 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
                 if f_key == "section_title":
                     current_section += 1
                     sub_counter = 0
-                    current_sub_id = None  # reset
+                    current_sub_id = None
                     global_key_tracker[f_key] += 1
                     count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
@@ -145,6 +148,20 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
     recurse(obj)
     return flat_dict
 
+def process_json_objects(json_objects, key_tracker, key_total_count):
+    if MERGE_JSON_SNIPPETS:
+        merged_flat = {}
+        for obj in json_objects:
+            flat = flatten_json(obj, key_tracker, key_total_count)
+            merged_flat.update(flat)
+        return [merged_flat]
+    else:
+        rows = []
+        for obj in json_objects:
+            flat = flatten_json(obj, key_tracker, key_total_count)
+            rows.append(flat)
+        return rows
+
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
 
@@ -174,11 +191,9 @@ def convert_json_to_csv(_: dict) -> dict:
     try:
         key_total_count = count_keys_across_all(json_objects)
         key_tracker = defaultdict(int)
-        rows = []
 
-        for obj in json_objects:
-            flat = flatten_json(obj, key_tracker, key_total_count)
-            rows.append(flat)
+        # 🔄 Use new merge logic
+        rows = process_json_objects(json_objects, key_tracker, key_total_count)
 
         seen_keys = set()
         ordered_keys = []
