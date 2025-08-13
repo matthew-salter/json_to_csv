@@ -3,14 +3,13 @@ import re
 import json
 from datetime import datetime
 from io import BytesIO
-from collections import defaultdict, Counter
 import xlsxwriter
 from supabase import create_client
 from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
 
-MERGE_JSON_SNIPPETS = True
+MERGE_JSON_SNIPPETS = True  # 🔧 Toggle this to merge all JSONs into one row
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -56,8 +55,7 @@ def split_multiple_jsons(text):
                     logger.warning(f"⚠️ Failed to parse block-style JSON: {e}")
                 current_block = ""
             continue
-
-        if re.match(r'^"\s*[^"]+\s*"\s*:\s*".*"\s*,?$', stripped):
+        if re.match(r'^"\s*[^"]+\s*"\s*:\s*".*?"\s*,?$', stripped):
             block.append(stripped)
         elif stripped == "" and block:
             try:
@@ -83,9 +81,6 @@ def split_multiple_jsons(text):
 
 def flatten_json(obj):
     flat_dict = {}
-    current_section = 0
-    sub_counter = 0
-    current_sub_id = None
 
     def format_key(k):
         return k.strip().lower().replace(" ", "_").replace("-", "_")
@@ -94,17 +89,9 @@ def flatten_json(obj):
         return str(v).replace("\n", "\\n") if isinstance(v, str) else str(v)
 
     def recurse(d):
-        nonlocal current_section, sub_counter, current_sub_id
         if isinstance(d, dict):
             for key, value in d.items():
                 f_key = format_key(key)
-                if f_key == "section_title":
-                    current_section += 1
-                    sub_counter = 0
-                    current_sub_id = None
-                if f_key == "sub_section_title":
-                    sub_counter += 1
-                    current_sub_id = f"{current_section}.{sub_counter}"
                 if isinstance(value, dict):
                     recurse(value)
                 elif isinstance(value, list):
@@ -121,42 +108,12 @@ def flatten_json(obj):
     recurse(obj)
     return flat_dict
 
-def apply_suffixes_to_flat_dict(flat_dict):
-    key_counts = Counter(flat_dict.keys())
-    suffix_counter = defaultdict(int)
-    renamed_dict = {}
-    for key in flat_dict.keys():
-        if key_counts[key] == 1:
-            renamed_dict[key] = flat_dict[key]
-        else:
-            suffix_counter[key] += 1
-            renamed_key = f"{key}_{suffix_counter[key]}"
-            renamed_dict[renamed_key] = flat_dict[key]
-    return renamed_dict
-
-def process_json_objects(json_objects, *_):
-    if MERGE_JSON_SNIPPETS:
-        merged_flat = {}
-        for obj in json_objects:
-            flat = flatten_json(obj)
-            for key, value in flat.items():
-                # If key already exists, add suffix
-                if key in merged_flat:
-                    i = 2
-                    new_key = f"{key}_{i}"
-                    while new_key in merged_flat:
-                        i += 1
-                        new_key = f"{key}_{i}"
-                    merged_flat[new_key] = value
-                else:
-                    merged_flat[key] = value
-        return [merged_flat]
-    else:
-        rows = []
-        for obj in json_objects:
-            flat = flatten_json(obj)
-            rows.append(flat)
-        return rows
+def process_json_objects(json_objects):
+    merged_flat = {}
+    for obj in json_objects:
+        flat = flatten_json(obj)
+        merged_flat.update(flat)
+    return [merged_flat]
 
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
@@ -164,32 +121,33 @@ def convert_json_to_csv(_: dict) -> dict:
     logger.info(f"📥 Input filename selected: {input_filename}")
     txt_content = read_supabase_file(f"JSON_Input_File/{input_filename}")
     logger.info(f"📄 File content preview:\n{txt_content[:400]}")
+
     json_objects = split_multiple_jsons(txt_content)
     if not json_objects:
         raise ValueError("No valid JSON objects found in file.")
+
     rows = process_json_objects(json_objects)
-    seen_keys = set()
-    ordered_keys = []
-    for row in rows:
-        for key in row.keys():
-            if key not in seen_keys:
-                seen_keys.add(key)
-                ordered_keys.append(key)
+    ordered_keys = list(rows[0].keys())
+
     output_stream = BytesIO()
     workbook = xlsxwriter.Workbook(output_stream, {'in_memory': True})
     worksheet = workbook.add_worksheet()
+
     for col, key in enumerate(ordered_keys):
         worksheet.write(0, col, key)
     for row_idx, row in enumerate(rows, 1):
         for col_idx, key in enumerate(ordered_keys):
             worksheet.write(row_idx, col_idx, row.get(key, ""))
+
     workbook.close()
     output_stream.seek(0)
     full_xlsx = output_stream.read()
+
     basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
     timestamp_str = basename if basename else datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
     output_filename = f"xlsx_output_file_{timestamp_str}.xlsx"
     output_path = f"csv_Output_File/{output_filename}"
+
     write_supabase_file(output_path, full_xlsx)
     logger.info(f"✅ XLSX written to: {output_path}")
     return {"status": "success", "csv_path": output_path}
