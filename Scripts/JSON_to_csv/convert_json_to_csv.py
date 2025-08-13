@@ -187,8 +187,12 @@ def count_keys_across_all(json_objects):
 
 def flatten_json(obj, global_key_tracker=None, global_key_total=None):
     flat_dict = {}
-    global_key_tracker = global_key_tracker or defaultdict(int)
-    global_key_total = global_key_total or {}
+
+    # ✅ Use None checks so we don't reset trackers between calls
+    if global_key_tracker is None:
+        global_key_tracker = defaultdict(int)
+    if global_key_total is None:
+        global_key_total = {}
 
     current_section = 0
     sub_counter = 0
