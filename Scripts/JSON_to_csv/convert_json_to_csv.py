@@ -37,29 +37,51 @@ def get_latest_input_file() -> str:
 
 def split_multiple_jsons(text):
     snippets = []
+
     buffer = []
     brace_count = 0
     collecting = False
+    found_valid_json = False
 
     for line in text.splitlines():
-        if not collecting and "{" in line:
+        stripped = line.strip()
+
+        # 🧠 JSON-style block
+        if not collecting and "{" in stripped:
             collecting = True
-            buffer = [line]
-            brace_count = line.count("{") - line.count("}")
+            buffer = [stripped]
+            brace_count = stripped.count("{") - stripped.count("}")
             continue
         elif collecting:
-            buffer.append(line)
-            brace_count += line.count("{") - line.count("}")
-
+            buffer.append(stripped)
+            brace_count += stripped.count("{") - stripped.count("}")
             if brace_count == 0:
-                joined = "\n".join(buffer)
                 try:
-                    parsed = json.loads(joined)
+                    parsed = json.loads("\n".join(buffer))
                     snippets.append(parsed)
+                    found_valid_json = True
                 except json.JSONDecodeError:
-                    logger.warning("⚠️ Failed to parse JSON snippet.")
+                    pass
                 collecting = False
                 buffer = []
+    
+    if not snippets:
+        # 🧱 No block-style JSON found — fallback to line-by-line parsing
+        current_block = {}
+        for line in text.splitlines():
+            if line.strip().startswith('"') and '":' in line:
+                try:
+                    key, value = line.strip().split(":", 1)
+                    key = key.strip().strip('"')
+                    value = value.strip().rstrip(',').strip('"')
+                    current_block[key] = value
+                except Exception:
+                    continue
+            elif line.strip() == "" and current_block:
+                snippets.append(current_block)
+                current_block = {}
+        if current_block:
+            snippets.append(current_block)
 
     return snippets
 
