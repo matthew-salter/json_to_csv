@@ -186,9 +186,17 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
 def process_json_objects(json_objects, key_tracker, key_total_count):
     if MERGE_JSON_SNIPPETS:
         merged_flat = {}
+        global_duplicate_counter = defaultdict(int)
+
         for obj in json_objects:
             flat = flatten_json(obj, key_tracker, key_total_count)
-            merged_flat.update(flat)
+            for key, value in flat.items():
+                global_duplicate_counter[key] += 1
+                if global_duplicate_counter[key] == 1:
+                    merged_flat[key] = value
+                else:
+                    merged_flat[f"{key}_{global_duplicate_counter[key]}"] = value
+
         return [merged_flat]
     else:
         rows = []
@@ -196,7 +204,7 @@ def process_json_objects(json_objects, key_tracker, key_total_count):
             flat = flatten_json(obj, key_tracker, key_total_count)
             rows.append(flat)
         return rows
-
+        
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
 
