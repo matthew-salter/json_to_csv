@@ -37,19 +37,30 @@ def get_latest_input_file() -> str:
 def split_multiple_jsons(text):
     snippets = []
     buffer = []
+    open_braces = 0
+    collecting = False
+
     for line in text.splitlines():
-        line = line.strip()
-        if line.startswith("{"):
-            buffer = [line]
-        elif line.endswith("}"):
-            buffer.append(line)
+        stripped = line.strip()
+        open_braces += stripped.count("{")
+        open_braces -= stripped.count("}")
+
+        if "{" in stripped and not collecting:
+            collecting = True
+            buffer = [stripped]
+        elif collecting:
+            buffer.append(stripped)
+
+        if collecting and open_braces == 0:
             joined = "\n".join(buffer)
             try:
-                snippets.append(json.loads(joined))
+                parsed = json.loads(joined)
+                snippets.append(parsed)
             except json.JSONDecodeError:
-                pass
-        elif buffer:
-            buffer.append(line)
+                pass  # silently skip invalid chunks
+            collecting = False
+            buffer = []
+
     return snippets
 
 def count_keys_across_all(json_objects):
