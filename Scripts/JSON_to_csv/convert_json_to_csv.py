@@ -139,8 +139,18 @@ def process_json_objects(json_objects, *_):
         merged_flat = {}
         for obj in json_objects:
             flat = flatten_json(obj)
-            merged_flat.update(flat)
-        return [apply_suffixes_to_flat_dict(merged_flat)]
+            for key, value in flat.items():
+                # If key already exists, add suffix
+                if key in merged_flat:
+                    i = 2
+                    new_key = f"{key}_{i}"
+                    while new_key in merged_flat:
+                        i += 1
+                        new_key = f"{key}_{i}"
+                    merged_flat[new_key] = value
+                else:
+                    merged_flat[key] = value
+        return [merged_flat]
     else:
         rows = []
         for obj in json_objects:
