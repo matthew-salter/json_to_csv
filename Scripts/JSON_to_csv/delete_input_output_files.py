@@ -99,6 +99,18 @@ def delete_input_output_files() -> Dict[str, Dict[str, int]]:
     logger.info(f"🧾 Cleanup results: {results}")
     return results
 
+def run_prompt(payload: dict | None = None):
+    """
+    Adapter for main.py's dispatcher.
+    Ignores the payload for now and runs the cleanup.
+    Returns a JSON-serializable dict.
+    """
+    try:
+        results = delete_input_output_files()
+        return {"status": "ok", "results": results}
+    except Exception as e:
+        logger.exception("❌ Cleanup failed in run_prompt()")
+        return {"status": "error", "error": str(e)}
 
 if __name__ == "__main__":
     try:
