@@ -46,21 +46,28 @@ def _list_objects(folder: str, limit: int = 100) -> List[str]:
 
 def _delete_paths(paths: List[str]) -> None:
     """
-    Batch delete by full paths relative to the bucket.
-    Uses: POST /storage/v1/object/remove with {"prefixes": ["folder/file1", ...]}
+    Robust deletion: DELETE each object individually.
+    Works across all Supabase deployments.
+
+    Endpoint: DELETE /storage/v1/object/{bucket}/{objectPath}
     """
     if not paths:
         return
 
-    url = f"{SUPABASE_URL}/storage/v1/object/remove"
-    headers = get_supabase_headers()
-    headers["Content-Type"] = "application/json"
+    if not SUPABASE_URL:
+        raise RuntimeError("SUPABASE_URL not configured")
 
-    payload = {"prefixes": paths}
-    logger.info(f"🗑️ Deleting {len(paths)} object(s)")
-    resp = requests.post(url, headers=headers, data=json.dumps(payload))
-    logger.debug(f"🛰️ Remove status: {resp.status_code}, body: {resp.text[:300]}")
-    resp.raise_for_status()
+    headers = get_supabase_headers()
+    # No body for DELETE; Content-Type not required
+
+    for p in paths:
+        url = f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_BUCKET}/{p}"
+        logger.info(f"🗑️ Deleting object: {SUPABASE_BUCKET}/{p}")
+        resp = requests.delete(url, headers=headers)
+        # 200 or 204 are typical; some setups return 200 with JSON
+        if resp.status_code not in (200, 204):
+            logger.debug(f"🛰️ Delete status: {resp.status_code}, body: {resp.text[:300]}")
+            resp.raise_for_status()
 
 
 def _empty_folder(folder: str) -> Dict[str, int]:
