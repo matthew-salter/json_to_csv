@@ -10,10 +10,8 @@ from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
 
-# 🔧 Toggle this to merge all JSONs into one row
-MERGE_JSON_SNIPPETS = True
+MERGE_JSON_SNIPPETS = True  # 🔧 Toggle this to merge all JSONs into one row
 
-# 🔹 Setup Supabase client
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = "panelitix"
@@ -37,56 +35,58 @@ def get_latest_input_file() -> str:
 
 def split_multiple_jsons(text):
     snippets = []
-    block_buffer = []
+    buffer = []
+    block = []
     brace_balance = 0
     current_block = ""
-
     lines = text.splitlines()
+
+    logger.info("🧪 Parsing input file line-by-line...")
 
     for line in lines:
         stripped = line.strip()
 
-        # --- Handle block JSONs wrapped in braces ---
+        # JSON block detection
         if "{" in stripped and not current_block:
             current_block = stripped
             brace_balance = stripped.count("{") - stripped.count("}")
             continue
-
         elif current_block:
             current_block += "\n" + stripped
             brace_balance += stripped.count("{") - stripped.count("}")
-
             if brace_balance == 0:
                 try:
                     parsed = json.loads(current_block)
                     snippets.append(parsed)
-                except Exception:
-                    pass
+                    logger.info(f"✅ Parsed JSON block with {len(parsed)} keys.")
+                except Exception as e:
+                    logger.warning(f"⚠️ Failed to parse block-style JSON: {e}")
                 current_block = ""
             continue
 
-        # --- Handle flat "key": "value" line blocks ---
+        # Loose line-by-line block
         if re.match(r'^"\s*[^"]+\s*"\s*:\s*".*"\s*,?$', stripped):
-            block_buffer.append(stripped)
-        elif stripped == "" and block_buffer:
-            # End of loose block
+            block.append(stripped)
+        elif stripped == "" and block:
             try:
-                joined = "{\n" + "\n".join(block_buffer) + "\n}"
+                joined = "{\n" + "\n".join(block) + "\n}"
                 parsed = json.loads(joined)
                 snippets.append(parsed)
-            except Exception:
-                pass
-            block_buffer = []
+                logger.info(f"✅ Parsed loose key:value block with {len(parsed)} keys.")
+            except Exception as e:
+                logger.warning(f"⚠️ Failed to parse flat block: {e}")
+            block = []
 
-    # If any remaining loose block at the end
-    if block_buffer:
+    if block:
         try:
-            joined = "{\n" + "\n".join(block_buffer) + "\n}"
+            joined = "{\n" + "\n".join(block) + "\n}"
             parsed = json.loads(joined)
             snippets.append(parsed)
-        except Exception:
-            pass
+            logger.info(f"✅ Parsed trailing block with {len(parsed)} keys.")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to parse final block: {e}")
 
+    logger.info(f"🧩 Total JSON snippets parsed: {len(snippets)}")
     return snippets
 
 def count_keys_across_all(json_objects):
@@ -129,7 +129,6 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
             for key, value in d.items():
                 f_key = format_key(key)
 
-                # SECTION logic
                 if f_key == "section_title":
                     current_section += 1
                     sub_counter = 0
@@ -141,7 +140,6 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
                     flat_dict[col_name] = clean_value(value)
                     continue
 
-                # SUB-SECTION logic
                 if f_key == "sub_section_title":
                     sub_counter += 1
                     current_sub_id = f"{current_section}.{sub_counter}"
@@ -215,21 +213,19 @@ def convert_json_to_csv(_: dict) -> dict:
         logger.error(f"❌ Failed to read input file: {e}")
         return {"error": str(e)}
 
-    logger.info(f"📄 Original file content preview:\n{txt_content[:200]}")
+    logger.info(f"📄 File content preview:\n{txt_content[:400]}")
 
     try:
         json_objects = split_multiple_jsons(txt_content)
         if not json_objects:
             raise ValueError("No valid JSON objects found in file.")
     except Exception as e:
-        logger.error(f"❌ Failed to parse multiple JSON objects: {e}")
+        logger.error(f"❌ JSON parsing error: {e}")
         return {"error": f"Invalid JSON structure: {e}"}
 
     try:
         key_total_count = count_keys_across_all(json_objects)
         key_tracker = defaultdict(int)
-
-        # 🔄 Use new merge logic
         rows = process_json_objects(json_objects, key_tracker, key_total_count)
 
         seen_keys = set()
@@ -254,16 +250,13 @@ def convert_json_to_csv(_: dict) -> dict:
         output_stream.seek(0)
         full_xlsx = output_stream.read()
     except Exception as e:
-        logger.error(f"❌ Failed to flatten and write XLSX: {e}")
-        return {"error": f"Flattening or XLSX error: {e}"}
+        logger.error(f"❌ XLSX generation error: {e}")
+        return {"error": str(e)}
 
     try:
         basename = input_filename.replace(".txt", "").replace("JSON_input_file_", "")
-        if not basename:
-            raise ValueError("Empty timestamp extracted from filename.")
-        timestamp_str = basename
+        timestamp_str = basename if basename else datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
     except Exception as e:
-        logger.warning(f"⚠️ Failed to parse timestamp from input filename: {e}")
         timestamp_str = datetime.utcnow().strftime("%d-%m-%Y_%H-%M-%S")
 
     output_filename = f"xlsx_output_file_{timestamp_str}.xlsx"
@@ -275,7 +268,7 @@ def convert_json_to_csv(_: dict) -> dict:
         logger.error(f"❌ Failed to write XLSX file: {e}")
         return {"error": str(e)}
 
-    logger.info(f"✅ XLSX written successfully to: {output_path}")
+    logger.info(f"✅ XLSX written to: {output_path}")
     return {"status": "success", "csv_path": output_path}
 
 def run_prompt(payload: dict) -> dict:
