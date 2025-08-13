@@ -28,11 +28,13 @@ def dynamic_ingest_typeform():
 
 # --- BLOCKING VS ASYNC PROMPTS (can expand later) ---
 BLOCKING_PROMPTS = {
-    "JSON_to_csv"
+    "JSON_to_csv",
+    "delete_input_output_files",
 }
 
 PROMPT_MODULES = {
     "JSON_to_csv": "Scripts.JSON_to_csv.convert_json_to_csv"
+    "delete_input_output_files": "Scripts.JSON_to_csv.delete_input_output_files",
 }
 
 # --- ZAPIER/JSON DISPATCH ROUTE ---
