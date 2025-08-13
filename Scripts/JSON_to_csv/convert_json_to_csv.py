@@ -1,4 +1,5 @@
 import os
+import re
 import json
 from datetime import datetime
 from io import BytesIO
@@ -37,29 +38,28 @@ def get_latest_input_file() -> str:
 def split_multiple_jsons(text):
     snippets = []
     buffer = []
-    open_braces = 0
+    brace_count = 0
     collecting = False
 
     for line in text.splitlines():
-        stripped = line.strip()
-        open_braces += stripped.count("{")
-        open_braces -= stripped.count("}")
-
-        if "{" in stripped and not collecting:
+        if not collecting and "{" in line:
             collecting = True
-            buffer = [stripped]
+            buffer = [line]
+            brace_count = line.count("{") - line.count("}")
+            continue
         elif collecting:
-            buffer.append(stripped)
+            buffer.append(line)
+            brace_count += line.count("{") - line.count("}")
 
-        if collecting and open_braces == 0:
-            joined = "\n".join(buffer)
-            try:
-                parsed = json.loads(joined)
-                snippets.append(parsed)
-            except json.JSONDecodeError:
-                pass  # silently skip invalid chunks
-            collecting = False
-            buffer = []
+            if brace_count == 0:
+                joined = "\n".join(buffer)
+                try:
+                    parsed = json.loads(joined)
+                    snippets.append(parsed)
+                except json.JSONDecodeError:
+                    logger.warning("⚠️ Failed to parse JSON snippet.")
+                collecting = False
+                buffer = []
 
     return snippets
 
