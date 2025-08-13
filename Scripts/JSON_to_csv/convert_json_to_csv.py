@@ -34,57 +34,135 @@ def get_latest_input_file() -> str:
         raise
 
 def split_multiple_jsons(text):
+    """
+    Robustly splits a plaintext file that may contain:
+      - Multiple JSON objects one after another, separated by commas (trailing '},')
+      - Proper block JSONs delimited by brace balance
+      - Loose key:value flat blocks
+
+    Key fixes:
+      * Strips a trailing comma from each captured object before json.loads()
+      * Recovers from partial parsing by attempting a per-block array fallback
+      * Handles 'loose' key:value lines by rebuilding a valid JSON object
+    """
     snippets = []
-    buffer = []
-    block = []
-    brace_balance = 0
-    current_block = ""
     lines = text.splitlines()
 
     logger.info("🧪 Parsing input file line-by-line...")
 
-    for line in lines:
-        stripped = line.strip()
+    current_block = ""
+    brace_balance = 0
 
-        # JSON block detection
-        if "{" in stripped and not current_block:
-            current_block = stripped
-            brace_balance = stripped.count("{") - stripped.count("}")
-            continue
-        elif current_block:
-            current_block += "\n" + stripped
-            brace_balance += stripped.count("{") - stripped.count("}")
-            if brace_balance == 0:
-                try:
-                    parsed = json.loads(current_block)
-                    snippets.append(parsed)
-                    logger.info(f"✅ Parsed JSON block with {len(parsed)} keys.")
-                except Exception as e:
-                    logger.warning(f"⚠️ Failed to parse block-style JSON: {e}")
-                current_block = ""
-            continue
+    flat_items = []  # for loose key:value lines
 
-        # Loose line-by-line block
-        if re.match(r'^"\s*[^"]+\s*"\s*:\s*".*"\s*,?$', stripped):
-            block.append(stripped)
-        elif stripped == "" and block:
+    # Regex to capture loose '"Key": <JSON_value>' lines with optional trailing comma
+    loose_kv_re = re.compile(r'^\s*"([^"]+)"\s*:\s*(.+?)\s*,?\s*$')
+
+    def finalize_json_block():
+        """Finalize and parse the current brace-balanced JSON block."""
+        nonlocal current_block
+        if not current_block:
+            return
+        block = current_block.strip()
+
+        # Remove a trailing comma if present (e.g., object followed by a comma in a top-level sequence)
+        if block.endswith(','):
+            block = block[:-1].rstrip()
+
+        try:
+            parsed = json.loads(block)
+            if isinstance(parsed, dict):
+                snippets.append(parsed)
+                logger.info(f"✅ Parsed JSON block with {len(parsed)} keys.")
+            else:
+                # In rare cases a block might itself contain multiple objects separated by commas
+                recovered = json.loads(f"[{block}]")
+                recovered_count = 0
+                for obj in recovered:
+                    if isinstance(obj, dict):
+                        snippets.append(obj)
+                        recovered_count += 1
+                logger.info(f"🛠️ Recovered {recovered_count} object(s) via array fallback (block).")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to parse block-style JSON: {e}. Trying array fallback for block...")
             try:
-                joined = "{\n" + "\n".join(block) + "\n}"
-                parsed = json.loads(joined)
+                recovered = json.loads(f"[{block}]")
+                recovered_count = 0
+                for obj in recovered:
+                    if isinstance(obj, dict):
+                        snippets.append(obj)
+                        recovered_count += 1
+                logger.info(f"🛠️ Recovered {recovered_count} object(s) via array fallback (block).")
+            except Exception as e2:
+                logger.error(f"❌ Could not parse block even with array fallback: {e2}")
+
+        current_block = ""
+
+    def finalize_loose_block():
+        """Finalize and parse a loose key:value block rebuilt into a valid JSON object."""
+        nonlocal flat_items
+        if not flat_items:
+            return
+        try:
+            obj_text = "{\n" + ",\n".join(flat_items) + "\n}"
+            parsed = json.loads(obj_text)
+            if isinstance(parsed, dict):
                 snippets.append(parsed)
                 logger.info(f"✅ Parsed loose key:value block with {len(parsed)} keys.")
-            except Exception as e:
-                logger.warning(f"⚠️ Failed to parse flat block: {e}")
-            block = []
-
-    if block:
-        try:
-            joined = "{\n" + "\n".join(block) + "\n}"
-            parsed = json.loads(joined)
-            snippets.append(parsed)
-            logger.info(f"✅ Parsed trailing block with {len(parsed)} keys.")
         except Exception as e:
-            logger.warning(f"⚠️ Failed to parse final block: {e}")
+            logger.warning(f"⚠️ Failed to parse flat block: {e}")
+        finally:
+            flat_items = []
+
+    for raw_line in lines:
+        line = raw_line.strip()
+
+        # If we are inside a brace-balanced JSON block, keep accumulating
+        if current_block:
+            current_block += "\n" + line
+            brace_balance += line.count("{") - line.count("}")
+            if brace_balance == 0:
+                # End of this JSON block
+                finalize_json_block()
+            continue
+
+        # If not in a block yet, check for the start of one
+        if "{" in line:
+            # If we were collecting loose lines, finalize them before starting a real block
+            if flat_items:
+                finalize_loose_block()
+
+            current_block = line
+            brace_balance = line.count("{") - line.count("}")
+            if brace_balance == 0:
+                # Single-line JSON object
+                finalize_json_block()
+            continue
+
+        # Otherwise, try to collect loose key:value lines
+        if not line:
+            # blank line separates loose blocks
+            finalize_loose_block()
+            continue
+
+        m = loose_kv_re.match(line)
+        if m:
+            key = m.group(1)
+            raw_val = m.group(2).strip()
+            # Ensure the value is valid JSON:
+            if not (raw_val.startswith('"') or raw_val.startswith('{') or raw_val.startswith('[')
+                    or raw_val in ('true', 'false', 'null') or re.match(r'^-?\d+(\.\d+)?$', raw_val)):
+                raw_val = json.dumps(raw_val.strip('"'))
+            flat_items.append(json.dumps(key) + ": " + raw_val)
+        else:
+            # Non-matching line inside a loose block: end the loose block
+            finalize_loose_block()
+
+    # Finalize any trailing constructs
+    if current_block:
+        finalize_json_block()
+    if flat_items:
+        finalize_loose_block()
 
     logger.info(f"🧩 Total JSON snippets parsed: {len(snippets)}")
     return snippets
