@@ -37,51 +37,55 @@ def get_latest_input_file() -> str:
 
 def split_multiple_jsons(text):
     snippets = []
+    block_buffer = []
+    brace_balance = 0
+    current_block = ""
 
-    buffer = []
-    brace_count = 0
-    collecting = False
-    found_valid_json = False
+    lines = text.splitlines()
 
-    for line in text.splitlines():
+    for line in lines:
         stripped = line.strip()
 
-        # 🧠 JSON-style block
-        if not collecting and "{" in stripped:
-            collecting = True
-            buffer = [stripped]
-            brace_count = stripped.count("{") - stripped.count("}")
+        # --- Handle block JSONs wrapped in braces ---
+        if "{" in stripped and not current_block:
+            current_block = stripped
+            brace_balance = stripped.count("{") - stripped.count("}")
             continue
-        elif collecting:
-            buffer.append(stripped)
-            brace_count += stripped.count("{") - stripped.count("}")
-            if brace_count == 0:
+
+        elif current_block:
+            current_block += "\n" + stripped
+            brace_balance += stripped.count("{") - stripped.count("}")
+
+            if brace_balance == 0:
                 try:
-                    parsed = json.loads("\n".join(buffer))
+                    parsed = json.loads(current_block)
                     snippets.append(parsed)
-                    found_valid_json = True
-                except json.JSONDecodeError:
-                    pass
-                collecting = False
-                buffer = []
-    
-    if not snippets:
-        # 🧱 No block-style JSON found — fallback to line-by-line parsing
-        current_block = {}
-        for line in text.splitlines():
-            if line.strip().startswith('"') and '":' in line:
-                try:
-                    key, value = line.strip().split(":", 1)
-                    key = key.strip().strip('"')
-                    value = value.strip().rstrip(',').strip('"')
-                    current_block[key] = value
                 except Exception:
-                    continue
-            elif line.strip() == "" and current_block:
-                snippets.append(current_block)
-                current_block = {}
-        if current_block:
-            snippets.append(current_block)
+                    pass
+                current_block = ""
+            continue
+
+        # --- Handle flat "key": "value" line blocks ---
+        if re.match(r'^"\s*[^"]+\s*"\s*:\s*".*"\s*,?$', stripped):
+            block_buffer.append(stripped)
+        elif stripped == "" and block_buffer:
+            # End of loose block
+            try:
+                joined = "{\n" + "\n".join(block_buffer) + "\n}"
+                parsed = json.loads(joined)
+                snippets.append(parsed)
+            except Exception:
+                pass
+            block_buffer = []
+
+    # If any remaining loose block at the end
+    if block_buffer:
+        try:
+            joined = "{\n" + "\n".join(block_buffer) + "\n}"
+            parsed = json.loads(joined)
+            snippets.append(parsed)
+        except Exception:
+            pass
 
     return snippets
 
