@@ -10,7 +10,7 @@ from Engine.Files.read_supabase_file import read_supabase_file
 from Engine.Files.write_supabase_file import write_supabase_file
 from logger import logger
 
-MERGE_JSON_SNIPPETS = True  # 🔧 Toggle this to merge all JSONs into one row
+MERGE_JSON_SNIPPETS = True
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
@@ -129,17 +129,18 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
             for key, value in d.items():
                 f_key = format_key(key)
 
+                # SECTION logic
                 if f_key == "section_title":
                     current_section += 1
                     sub_counter = 0
                     current_sub_id = None
                     global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
-                    col_name = f"{f_key}_{count}" if total > 1 else f_key
+                    col_name = f"{f_key}_{global_key_tracker[f_key]}" if total > 1 else f_key
                     flat_dict[col_name] = clean_value(value)
                     continue
 
+                # SUB-SECTION logic
                 if f_key == "sub_section_title":
                     sub_counter += 1
                     current_sub_id = f"{current_section}.{sub_counter}"
@@ -155,24 +156,26 @@ def flatten_json(obj, global_key_tracker=None, global_key_total=None):
                         for v in value
                     )
                     global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
 
                     if f_key.startswith("sub_") and current_sub_id:
                         col_name = f"{f_key}_{current_sub_id}"
+                    elif total > 1:
+                        col_name = f"{f_key}_{global_key_tracker[f_key]}"
                     else:
-                        col_name = f"{f_key}_{count}" if total > 1 else f_key
+                        col_name = f_key
 
                     flat_dict[col_name] = list_val
                 else:
                     global_key_tracker[f_key] += 1
-                    count = global_key_tracker[f_key]
                     total = global_key_total.get(f_key, 1)
 
                     if f_key.startswith("sub_") and current_sub_id:
                         col_name = f"{f_key}_{current_sub_id}"
+                    elif total > 1:
+                        col_name = f"{f_key}_{global_key_tracker[f_key]}"
                     else:
-                        col_name = f"{f_key}_{count}" if total > 1 else f_key
+                        col_name = f_key
 
                     flat_dict[col_name] = clean_value(value)
 
@@ -204,7 +207,7 @@ def process_json_objects(json_objects, key_tracker, key_total_count):
             flat = flatten_json(obj, key_tracker, key_total_count)
             rows.append(flat)
         return rows
-        
+
 def convert_json_to_csv(_: dict) -> dict:
     logger.info("🚀 Starting JSON to XLSX conversion")
 
