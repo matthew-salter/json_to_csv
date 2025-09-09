@@ -7,3 +7,4 @@ supabase
 PyYAML
 pytz
 xlsxwriter
+pandas
