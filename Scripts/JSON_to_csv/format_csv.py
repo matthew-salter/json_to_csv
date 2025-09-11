@@ -7,7 +7,7 @@ from typing import Dict, Any, List, Tuple
 import pandas as pd
 from supabase import create_client
 from logger import logger
-from Engine.Files.write_supabase_file import write_supabase_file  # keep existing writer
+from Engine.Files.write_supabase_file import write_supabase_file
 
 # -----------------------------------------------------------
 # Config
@@ -18,19 +18,23 @@ SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
 SUPABASE_BUCKET = "panelitix"
 SUPABASE_ROOT_FOLDER = (os.getenv("SUPABASE_ROOT_FOLDER", "").strip("/"))  # e.g., "JSON_to_csv"
 
-# LIST path is absolute (bucket-rooted); read/write paths are relative to ROOT
 INPUT_DIR_REL = "csv_Output_File/"
 OUTPUT_DIR_REL = "Formatted_csv_Output_File/"
 LIST_DIR_ABS = f"{SUPABASE_ROOT_FOLDER}/{INPUT_DIR_REL}" if SUPABASE_ROOT_FOLDER else INPUT_DIR_REL
 
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-# -----------------------------------------------------------
-# Patterns and Output Schema
-# -----------------------------------------------------------
+try:
+    import openpyxl  # noqa: F401
+    from openpyxl import __version__ as _oxl_ver
+    logger.info(f"✅ openpyxl loaded: v{_oxl_ver}")
+except Exception as e:
+    logger.error("❌ openpyxl is required to read .xlsx files. Add `openpyxl>=3.1.2` to requirements.")
+    raise
 
-SECTION_RE = re.compile(r"^(section)_(.+)_(\d+)$")
-SUB_SECTION_RE = re.compile(r"^(sub_section)_(.+)_(\d+\.\d+)$")
+# -----------------------------------------------------------
+# Output schema
+# -----------------------------------------------------------
 
 OUT_COLUMNS = [
     "report_change",
@@ -59,103 +63,124 @@ OUT_COLUMNS = [
 ]
 
 # -----------------------------------------------------------
-# Path helpers
+# Helpers
 # -----------------------------------------------------------
 
 def _as_rel(path: str) -> str:
-    """Ensure a path is RELATIVE to SUPABASE_ROOT_FOLDER (strip if accidentally included)."""
     if not SUPABASE_ROOT_FOLDER:
         return path.lstrip("/")
     prefix = f"{SUPABASE_ROOT_FOLDER}/"
     return path[len(prefix):] if path.startswith(prefix) else path
 
 def _to_abs(rel_path: str) -> str:
-    """Make a bucket-rooted ABSOLUTE storage path."""
     rel_path = rel_path.lstrip("/")
     return f"{SUPABASE_ROOT_FOLDER}/{rel_path}" if SUPABASE_ROOT_FOLDER else rel_path
-
-# -----------------------------------------------------------
-# Supabase IO (binary-safe)
-# -----------------------------------------------------------
 
 def list_folder(abs_prefix: str) -> List[Dict[str, Any]]:
     logger.info(f"📂 Listing: {abs_prefix}")
     return supabase.storage.from_(SUPABASE_BUCKET).list(abs_prefix) or []
 
 def read_xlsx_from_supabase(rel_path: str) -> pd.DataFrame:
-    """
-    Read Excel as RAW BYTES via Supabase Storage .download (no text decode),
-    then parse with pandas/openpyxl.
-    """
     rel_path = _as_rel(rel_path)
     abs_path = _to_abs(rel_path)
-
     logger.info(f"📥 Downloading (abs): {abs_path}")
-    raw: bytes = supabase.storage.from_(SUPABASE_BUCKET).download(abs_path)  # returns bytes
+    raw: bytes = supabase.storage.from_(SUPABASE_BUCKET).download(abs_path)
     bio = io.BytesIO(raw)
-
-    # Requires openpyxl to be installed
     df = pd.read_excel(bio, engine="openpyxl")
+    logger.info(f"📄 Input sheet shape: {df.shape}. First 5 headers: {list(df.columns)[:5]}")
     return df
 
 def write_xlsx_to_supabase(df: pd.DataFrame, rel_path: str) -> None:
-    """
-    Always write XLSX (binary) using xlsxwriter.
-    """
     rel_path = _as_rel(rel_path)
-    # Force .xlsx extension (keeps same name if already .xlsx)
     base, _ext = os.path.splitext(rel_path)
     rel_xlsx = f"{base}.xlsx"
-
-    logger.info(f"💾 Writing XLSX (rel): {rel_xlsx}")
+    logger.info(f"💾 Writing XLSX (rel): {rel_xlsx} with shape {df.shape}")
     buf = io.BytesIO()
     with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False)
-    payload = buf.getvalue()
+    write_supabase_file(rel_xlsx, buf.getvalue())
 
-    write_supabase_file(rel_xlsx, payload)  # helper prefixes SUPABASE_ROOT_FOLDER internally
+def _canon(s: str) -> str:
+    """lower + trim + spaces/dashes -> '_' + collapse multiple '_'"""
+    x = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
+    x = re.sub(r"_+", "_", x)
+    return x
+
+# Accept:
+#   section_<field>_<N>
+_SECTION_RE = re.compile(r"^section_(?P<field>.+)_(?P<num>\d+)$")
+
+# Accept BOTH:
+#   sub_section_<field>_<N>.<M>
+#   sub_section_<field>_<N>_<M>
+_SUB_RE = re.compile(r"^sub_section_(?P<field>.+)_(?P<snum>\d+(?:[._]\d+))$")
+
+def _normalize_sub_num(snum: str) -> str:
+    """Turn '1_2' into '1.2' for consistent float conversion."""
+    return snum.replace("_", ".")
 
 # -----------------------------------------------------------
-# Core Transform
+# Core Transform (hardened)
 # -----------------------------------------------------------
 
 def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Convert 1-row wide input into long format with:
-    - de-suffixed headers
-    - section_number (int), sub_section_number (float/NA)
-    - repeated section fields each row
-    """
     if df.shape[0] == 0:
         return pd.DataFrame(columns=OUT_COLUMNS)
 
-    row = df.iloc[0].to_dict()
+    # Build canonical key -> value from the first data row
+    row0 = df.iloc[0].to_dict()
+    canon_row: Dict[str, Any] = {_canon(k): v for k, v in row0.items()}
 
-    # Gather sections: section_<field>_<N>
+    # Gather SECTIONS
     sections: Dict[str, Dict[str, Any]] = {}
-    for k, v in row.items():
-        m = SECTION_RE.match(k)
-        if m:
-            _, field, num = m.groups()
-            sections.setdefault(num, {})[field] = v
+    for k, v in canon_row.items():
+        m = _SECTION_RE.match(k)
+        if not m:
+            continue
+        field = _canon(m.group("field"))
+        num = m.group("num")  # keep as string for now
+        sections.setdefault(num, {})[field] = v
 
-    # Gather sub-sections grouped by parent section: sub_section_<field>_<N.M>
+    # Gather SUB-SECTIONS grouped by section number prefix
     subsections: Dict[str, Dict[str, Dict[str, Any]]] = {}
-    for k, v in row.items():
-        m = SUB_SECTION_RE.match(k)
-        if m:
-            _, field, snum = m.groups()      # e.g., "1.2"
-            sec_prefix = snum.split(".")[0]  # "1"
-            subsections.setdefault(sec_prefix, {}).setdefault(snum, {})[field] = v
+    for k, v in canon_row.items():
+        m = _SUB_RE.match(k)
+        if not m:
+            continue
+        field = _canon(m.group("field"))
+        snum_raw = m.group("snum")          # e.g., "1.2" or "1_2"
+        snum_norm = _normalize_sub_num(snum_raw)  # "1.2"
+        sec_prefix = snum_norm.split(".")[0]      # "1"
+        subsections.setdefault(sec_prefix, {}).setdefault(snum_norm, {})[field] = v
 
-    report_change = row.get("report_change")
+    # Fallbacks (in case headers arrived without suffixes — rare, but safe)
+    if not sections:
+        # detect unsuffixed fields, treat as one section "1"
+        hint_keys = [k for k in canon_row.keys() if k.startswith("section_")]
+        if hint_keys:
+            logger.warning("⚠️ No numbered section headers matched; falling back to single-section mode.")
+            sections = {"1": {}}
+            for k, v in canon_row.items():
+                if k.startswith("section_") and not re.search(r"_\d+$", k):
+                    sections["1"][k[len("section_"):]] = v
+
+    report_change = canon_row.get("report_change")
+    logger.info(f"🔎 Detected section numbers: {sorted(sections.keys(), key=lambda x: int(x)) if sections else 'NONE'}")
+    if subsections:
+        _flat_sub_nums = sorted(
+            [sn for sec, mp in subsections.items() for sn in mp.keys()],
+            key=lambda s: (int(s.split(".")[0]), int(s.split(".")[1]))
+        )
+        logger.info(f"🔎 Detected sub-section numbers: {_flat_sub_nums}")
+    else:
+        logger.info("🔎 Detected sub-section numbers: NONE")
 
     out_rows: List[Dict[str, Any]] = []
 
-    def make_section_base(sec_num: str, sec_fields: Dict[str, Any]) -> Dict[str, Any]:
+    def _base(sec_num: str, sec_fields: Dict[str, Any]) -> Dict[str, Any]:
         return {
             "report_change": report_change,
-            "section_number": int(sec_num) if sec_num is not None else None,
+            "section_number": int(sec_num) if sec_num else None,
             "section_title": sec_fields.get("title"),
             "section_summary": sec_fields.get("summary"),
             "section_makeup": sec_fields.get("makeup"),
@@ -169,14 +194,14 @@ def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
         }
 
     for sec_num in sorted(sections.keys(), key=lambda x: int(x)):
-        sec_fields = sections[sec_num]
+        sec_fields = sections.get(sec_num, {})
         sub_map = subsections.get(sec_num, {})
 
         if sub_map:
             for sub_num in sorted(sub_map.keys(),
                                   key=lambda s: (int(s.split(".")[0]), int(s.split(".")[1]))):
                 sub_fields = sub_map[sub_num]
-                rec = make_section_base(sec_num, sec_fields)
+                rec = _base(sec_num, sec_fields)
                 rec.update({
                     "sub_section_number": float(sub_num),
                     "sub_section_title": sub_fields.get("title"),
@@ -192,7 +217,7 @@ def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
                 })
                 out_rows.append(rec)
         else:
-            rec = make_section_base(sec_num, sec_fields)
+            rec = _base(sec_num, sec_fields)
             rec.update({
                 "sub_section_number": pd.NA,
                 "sub_section_title": pd.NA,
@@ -208,17 +233,15 @@ def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
             })
             out_rows.append(rec)
 
-    return pd.DataFrame(out_rows, columns=OUT_COLUMNS)
+    out_df = pd.DataFrame(out_rows, columns=OUT_COLUMNS)
+    logger.info(f"🧮 Built rows: {len(out_df)}")
+    return out_df
 
 # -----------------------------------------------------------
 # Orchestration
 # -----------------------------------------------------------
 
 def process_single_file(filename: str) -> str:
-    """
-    Read one Excel from INPUT_DIR_REL, transform, and write XLSX
-    to OUTPUT_DIR_REL with the SAME base filename.
-    """
     in_rel = f"{INPUT_DIR_REL}{filename}"
     out_rel = f"{OUTPUT_DIR_REL}{filename}"
 
@@ -235,26 +258,20 @@ def process_single_file(filename: str) -> str:
     return out_rel
 
 def process_all_files() -> Dict[str, Any]:
-    """Process every file under LIST_DIR_ABS and write formatted XLSX outputs."""
     entries = list_folder(LIST_DIR_ABS)
     written = []
-
     for e in entries:
         name = e.get("name")
         if not name or name.endswith("/"):
-            continue  # skip folders
-
-        # Only process Excel; you said inputs are XLSX
+            continue
         if not name.lower().endswith((".xlsx", ".xls")):
             logger.info(f"⏭️ Skipping non-Excel file: {name}")
             continue
-
         try:
             out_path_rel = process_single_file(name)
             written.append(out_path_rel)
         except Exception as ex:
             logger.error(f"❌ Failed to process '{name}': {ex}")
-
     return {"written": written, "count": len(written)}
 
 def run_prompt(_: dict) -> dict:
