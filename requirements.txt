@@ -8,3 +8,4 @@ PyYAML
 pytz
 xlsxwriter
 pandas
+openpyxl==3.1.5
