@@ -28,7 +28,7 @@ try:
     import openpyxl  # noqa: F401
     from openpyxl import __version__ as _oxl_ver
     logger.info(f"✅ openpyxl loaded: v{_oxl_ver}")
-except Exception as e:
+except Exception:
     logger.error("❌ openpyxl is required to read .xlsx files. Add `openpyxl>=3.1.2` to requirements.")
     raise
 
@@ -101,77 +101,75 @@ def write_xlsx_to_supabase(df: pd.DataFrame, rel_path: str) -> None:
     write_supabase_file(rel_xlsx, buf.getvalue())
 
 def _canon(s: str) -> str:
-    """lower + trim + spaces/dashes -> '_' + collapse multiple '_'"""
     x = (s or "").strip().lower().replace(" ", "_").replace("-", "_")
-    x = re.sub(r"_+", "_", x)
-    return x
+    return re.sub(r"_+", "_", x)
 
-# Accept:
-#   section_<field>_<N>
+# Accept: section_<field>_<N>
 _SECTION_RE = re.compile(r"^section_(?P<field>.+)_(?P<num>\d+)$")
-
-# Accept BOTH:
-#   sub_section_<field>_<N>.<M>
-#   sub_section_<field>_<N>_<M>
+# Accept both: sub_section_<field>_<N>.<M> and sub_section_<field>_<N>_<M>
 _SUB_RE = re.compile(r"^sub_section_(?P<field>.+)_(?P<snum>\d+(?:[._]\d+))$")
 
 def _normalize_sub_num(snum: str) -> str:
-    """Turn '1_2' into '1.2' for consistent float conversion."""
     return snum.replace("_", ".")
 
+def _has_section_schema(canon_cols: List[str]) -> bool:
+    return any(_SECTION_RE.match(c) for c in canon_cols) or any(_SUB_RE.match(c) for c in canon_cols)
+
 # -----------------------------------------------------------
-# Core Transform (hardened)
+# Core Transform
 # -----------------------------------------------------------
 
 def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
     if df.shape[0] == 0:
         return pd.DataFrame(columns=OUT_COLUMNS)
 
-    # Build canonical key -> value from the first data row
+    # Canonicalize headers and row0 values
     row0 = df.iloc[0].to_dict()
     canon_row: Dict[str, Any] = {_canon(k): v for k, v in row0.items()}
+    canon_cols = list(canon_row.keys())
 
-    # Gather SECTIONS
+    # Schema check
+    if not _has_section_schema(canon_cols):
+        logger.warning("⚠️ No section/sub-section headers detected. "
+                       "Expected e.g. 'section_title_1', 'sub_section_title_1.1'. "
+                       f"First 20 canonical headers: {canon_cols[:20]}")
+        # Return empty to signal caller to SKIP WRITING
+        return pd.DataFrame(columns=OUT_COLUMNS)
+
+    # Gather sections
     sections: Dict[str, Dict[str, Any]] = {}
     for k, v in canon_row.items():
         m = _SECTION_RE.match(k)
         if not m:
             continue
         field = _canon(m.group("field"))
-        num = m.group("num")  # keep as string for now
+        num = m.group("num")
         sections.setdefault(num, {})[field] = v
 
-    # Gather SUB-SECTIONS grouped by section number prefix
+    # Gather sub-sections
     subsections: Dict[str, Dict[str, Dict[str, Any]]] = {}
     for k, v in canon_row.items():
         m = _SUB_RE.match(k)
         if not m:
             continue
         field = _canon(m.group("field"))
-        snum_raw = m.group("snum")          # e.g., "1.2" or "1_2"
-        snum_norm = _normalize_sub_num(snum_raw)  # "1.2"
-        sec_prefix = snum_norm.split(".")[0]      # "1"
+        snum_norm = _normalize_sub_num(m.group("snum"))  # "1.2"
+        sec_prefix = snum_norm.split(".")[0]             # "1"
         subsections.setdefault(sec_prefix, {}).setdefault(snum_norm, {})[field] = v
 
-    # Fallbacks (in case headers arrived without suffixes — rare, but safe)
-    if not sections:
-        # detect unsuffixed fields, treat as one section "1"
-        hint_keys = [k for k in canon_row.keys() if k.startswith("section_")]
-        if hint_keys:
-            logger.warning("⚠️ No numbered section headers matched; falling back to single-section mode.")
-            sections = {"1": {}}
-            for k, v in canon_row.items():
-                if k.startswith("section_") and not re.search(r"_\d+$", k):
-                    sections["1"][k[len("section_"):]] = v
-
     report_change = canon_row.get("report_change")
-    logger.info(f"🔎 Detected section numbers: {sorted(sections.keys(), key=lambda x: int(x)) if sections else 'NONE'}")
+
+    if sections:
+        logger.info(f"🔎 Detected section numbers: {sorted(sections.keys(), key=lambda x: int(x))}")
+    else:
+        logger.info("🔎 Detected section numbers: NONE")
+
     if subsections:
-        _flat_sub_nums = sorted(
+        flat_subs = sorted(
             [sn for sec, mp in subsections.items() for sn in mp.keys()],
             key=lambda s: (int(s.split(".")[0]), int(s.split(".")[1]))
         )
-        logger.info(f"🔎 Detected sub-section numbers: {_flat_sub_nums}")
+        logger.info(f"🔎 Detected sub-section numbers: {flat_subs}")
     else:
         logger.info("🔎 Detected sub-section numbers: NONE")
 
@@ -198,8 +196,9 @@ def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
         sub_map = subsections.get(sec_num, {})
 
         if sub_map:
-            for sub_num in sorted(sub_map.keys(),
-                                  key=lambda s: (int(s.split(".")[0]), int(s.split(".")[1]))):
+            for sub_num in sorted(
+                sub_map.keys(), key=lambda s: (int(s.split(".")[0]), int(s.split(".")[1]))
+            ):
                 sub_fields = sub_map[sub_num]
                 rec = _base(sec_num, sec_fields)
                 rec.update({
@@ -241,7 +240,10 @@ def transform_flat_sheet_to_long(df: pd.DataFrame) -> pd.DataFrame:
 # Orchestration
 # -----------------------------------------------------------
 
-def process_single_file(filename: str) -> str:
+def process_single_file(filename: str) -> Tuple[str, bool, str]:
+    """
+    Returns: (name, written_bool, reason_if_skipped)
+    """
     in_rel = f"{INPUT_DIR_REL}{filename}"
     out_rel = f"{OUTPUT_DIR_REL}{filename}"
 
@@ -251,15 +253,21 @@ def process_single_file(filename: str) -> str:
     logger.info("🔧 Transforming to formatted long layout...")
     df_out = transform_flat_sheet_to_long(df_in)
 
+    # If no rows, skip writing and explain why
+    if df_out.shape[0] == 0:
+        logger.warning(f"⏭️ Skipping write for '{filename}': no rows built (schema mismatch).")
+        return (filename, False, "no section/sub-section headers found")
+
     logger.info(f"📤 Writing XLSX (rel): {out_rel}")
     write_xlsx_to_supabase(df_out, out_rel)
 
     logger.info(f"✅ Done: {out_rel}")
-    return out_rel
+    return (filename, True, "")
 
-def process_all_files() -> Dict[str, Any]:
+def process_all_files(debug_headers: bool = False, header_preview: int = 20) -> Dict[str, Any]:
     entries = list_folder(LIST_DIR_ABS)
-    written = []
+    written, skipped = [], []
+
     for e in entries:
         name = e.get("name")
         if not name or name.endswith("/"):
@@ -267,16 +275,32 @@ def process_all_files() -> Dict[str, Any]:
         if not name.lower().endswith((".xlsx", ".xls")):
             logger.info(f"⏭️ Skipping non-Excel file: {name}")
             continue
-        try:
-            out_path_rel = process_single_file(name)
-            written.append(out_path_rel)
-        except Exception as ex:
-            logger.error(f"❌ Failed to process '{name}': {ex}")
-    return {"written": written, "count": len(written)}
 
-def run_prompt(_: dict) -> dict:
+        if debug_headers:
+            # dump first N canonical headers then continue (no write)
+            in_rel = f"{INPUT_DIR_REL}{name}"
+            df = read_xlsx_from_supabase(in_rel)
+            canon_cols = [_canon(c) for c in list(df.columns)]
+            logger.info(f"🪪 {name} — first {header_preview} headers: {canon_cols[:header_preview]}")
+            continue
+
+        fname, did_write, reason = process_single_file(name)
+        if did_write:
+            written.append(f"{OUTPUT_DIR_REL}{fname}")
+        else:
+            skipped.append({"file": fname, "reason": reason})
+
+    return {"written": written, "count": len(written), "skipped": skipped}
+
+def run_prompt(payload: dict) -> dict:
+    """
+    payload options:
+      { "debug_headers": true, "header_preview": 40 }
+    """
     logger.info("🚀 Starting Section/Sub-Section formatter")
-    result = process_all_files()
+    debug_headers = bool(payload.get("debug_headers", False))
+    header_preview = int(payload.get("header_preview", 20))
+    result = process_all_files(debug_headers=debug_headers, header_preview=header_preview)
     logger.info(f"🏁 Completed: {result}")
     return result
 
