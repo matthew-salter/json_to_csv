@@ -131,6 +131,11 @@ def transform_by_suffix(df: pd.DataFrame) -> pd.DataFrame:
         globals_map[k] = v
         _remember(order_global, k)
 
+    # ✅ NEW: Pass-through when there are no numeric suffixes at all
+    if not sections and not subs:
+        logger.info("ℹ️ No numeric suffixes detected; writing pass-through (input == output).")
+        return df.copy()
+
     # Collision handling: base name appears in both section & sub buckets
     sec_bases = set(order_sec)
     sub_bases = set(order_sub)
@@ -168,11 +173,6 @@ def transform_by_suffix(df: pd.DataFrame) -> pd.DataFrame:
     if not section_nums and subs:
         # There are sub-sections but no explicit section_*_N keys: infer sections from subs' majors
         section_nums = sorted(subs.keys())
-
-    if not section_nums and not subs:
-        # Nothing to materialize
-        logger.warning("⚠️ No section or sub-section indices found by suffix. Returning empty frame.")
-        return pd.DataFrame(columns=columns)
 
     for sec_num in section_nums:
         sec_fields = sections.get(sec_num, {})
